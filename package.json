@@ -1,0 +1,16 @@
+{
+  "name": "sketch-arena-reborn",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "concurrently -n server,web -c magenta,cyan \"npm run dev -w @sketch-arena/server\" \"npm run dev -w @sketch-arena/web\"",
+    "build": "npm run build -w @sketch-arena/protocol && npm run build -w @sketch-arena/server && npm run build -w @sketch-arena/web",
+    "test": "npm run build -w @sketch-arena/protocol && npm run test -w @sketch-arena/server",
+    "check": "npm run build && npm run test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.3"
+  }
+}
