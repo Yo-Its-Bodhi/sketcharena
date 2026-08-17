@@ -27,6 +27,7 @@ Updated: 2026-08-17
 - [x] Season XP, levels, achievements, cosmetics, equipment and free/premium Panic Pass entitlement tracks.
 - [x] Call-of-Duty-style dual lanes share one XP bar: Free remains worthwhile, Premium adds only cosmetics and Mint Credits, never competitive power.
 - [x] Every Season 0 beta account permanently reserves a free Season 1 Premium Panic Pass as a Founding Weirdo reward.
+- [x] A repeat-safe PostgreSQL migration reserves that entitlement for existing offline beta accounts; runtime provisioning covers every new Season 0 account.
 - [x] Season 0 Premium contains a full 10-reward lane, including working Riot Marker, Neon Panic and Chaos Charcoal Studio brushes.
 - [x] First Panic Archive mint is an immediate welcome entitlement, not a fake random loot claim.
 - [x] Reward Inbox is notification/history; rewards are usable as soon as they are earned.
@@ -61,7 +62,7 @@ The Panic Pass is the seasonal progression track. Players earn XP through comple
 - [x] PostgreSQL-backed production domains, migrations, health endpoints, structured logs, backup verification and systemd/Nginx deployment shape.
 - [x] Browser smoke coverage for entry, Lobby, nine-deck setup, Studio controls, save/start-fresh and Vault persistence.
 - [x] Automated lint, production builds, server/web tests, operations tests and contract tests.
-- [ ] Push this leaderboard/reward release and deploy only `/opt/sketch-arena/current`.
+- [x] Push the leaderboard/reward/pass release and deploy only `/opt/sketch-arena/current`.
 - [ ] Confirm the live release SHA, health, primary UI paths and mobile layout.
 - [ ] After contract deployment: verify one free canary mint, one paid quote without submission, public Archive indexing and NFTStudio marketplace handoff.
 
