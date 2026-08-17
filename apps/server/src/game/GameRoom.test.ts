@@ -67,9 +67,13 @@ describe('GameRoom authoritative lifecycle', () => {
     expect(room.view().players.find((player) => player.name === 'Alice')).toMatchObject({ avatarItem: 'golden-chaos-avatar', avatarSeed: 1 });
   });
 
-  it('uses room capacity as the fixed match length and rotates two players evenly', () => {
+  it('always runs eight drawings regardless of room capacity and rotates two players evenly', () => {
+    room = new GameRoom('Four Seat Show', 'chaos', false, 4, GAME.roundMs, () => now, () => 0);
+    aliceId = room.join('11111111-1111-4111-8111-111111111111', 'socket-a', 'Alice').id;
+    room.join('22222222-2222-4222-8222-222222222222', 'socket-b', 'Bob');
     room.start('11111111-1111-4111-8111-111111111111');
     expect(room.totalRounds).toBe(8);
+    expect(room.view().matchRounds).toBe(8);
     const drawers: string[] = [];
     for (let round = 0; round < 8; round += 1) {
       room.beginRound(); drawers.push(room.drawerId!); room.finishRound('time'); vi.advanceTimersByTime(GAME.revealMs);
@@ -81,7 +85,7 @@ describe('GameRoom authoritative lifecycle', () => {
     expect(drawers.filter((id) => id !== aliceId)).toHaveLength(4);
   });
 
-  it('keeps uneven crews fair while honoring the configured room capacity', () => {
+  it('keeps uneven crews fair across the fixed eight drawings', () => {
     const charlieId = room.join('33333333-3333-4333-8333-333333333333', 'socket-c', 'Charlie').id;
     room.start('11111111-1111-4111-8111-111111111111');
     const counts = new Map<string, number>();
@@ -104,12 +108,12 @@ describe('GameRoom authoritative lifecycle', () => {
     const leaver = room.view().players.find((player) => player.id !== room.drawerId)!;
     room.leaveBySession(leaver.sessionId);
     room.finishRound('time'); vi.advanceTimersByTime(GAME.revealMs);
-    for (let round = 1; round < 6; round += 1) {
+    for (let round = 1; round < GAME.matchRounds; round += 1) {
       room.beginRound(); room.finishRound('time'); vi.advanceTimersByTime(GAME.revealMs);
     }
 
     expect(room.phase).toBe('afterparty');
-    expect(room.rounds).toHaveLength(6);
+    expect(room.rounds).toHaveLength(8);
   });
 
   it('publishes lobby readiness and clears it when the match starts', () => {
@@ -156,7 +160,33 @@ describe('GameRoom authoritative lifecycle', () => {
     while (room.phase !== 'afterparty') {
       room.beginRound(); room.finishRound('time'); vi.advanceTimersByTime(GAME.revealMs);
     }
-    expect(room.rounds).toHaveLength(6);
+    expect(room.rounds).toHaveLength(8);
+  });
+
+  it('shares the crown instead of silently favoring join order on a complete tie', () => {
+    room.start('11111111-1111-4111-8111-111111111111');
+    for (let round = 0; round < GAME.matchRounds; round += 1) {
+      room.beginRound(); room.finishRound('time'); vi.advanceTimersByTime(GAME.revealMs);
+    }
+    const result = room.matchResult()!;
+    expect(result.winners.map((player) => player.name).sort()).toEqual(['Alice', 'Bob']);
+    expect(result.tieBreak.rule).toBe('shared');
+  });
+
+  it('breaks equal scores by correct guesses and then combined solve time', () => {
+    room.start('11111111-1111-4111-8111-111111111111');
+    for (let round = 0; round < GAME.matchRounds; round += 1) {
+      room.beginRound(); room.finishRound('time'); vi.advanceTimersByTime(GAME.revealMs);
+    }
+    const bob = room.view().players.find((player) => player.name === 'Bob')!;
+    for (const player of room.players.values()) player.score = 500;
+    room.rounds[0]!.correct = [{ playerId: aliceId, playerName: 'Alice', points: 100, elapsedMs: 7_000 }];
+    room.rounds[1]!.correct = [{ playerId: bob.id, playerName: 'Bob', points: 100, elapsedMs: 3_000 }];
+    room.rounds[2]!.correct = [{ playerId: aliceId, playerName: 'Alice', points: 100, elapsedMs: 9_000 }];
+    expect(room.matchResult()).toMatchObject({ winner: { name: 'Alice' }, tieBreak: { rule: 'correct-guesses' } });
+
+    room.rounds[2]!.correct = [];
+    expect(room.matchResult()).toMatchObject({ winner: { name: 'Bob' }, tieBreak: { rule: 'fastest-total' } });
   });
 
   it('ignores a late disconnect from a socket that has already been replaced', () => {

@@ -5,6 +5,7 @@ import { randomWord } from '../words.js';
 export const GAME = {
   minPlayers: 2,
   maxPlayers: 8,
+  matchRounds: 8,
   countdownMs: 3_000,
   roundMs: 45_000,
   revealMs: 8_000,
@@ -208,7 +209,7 @@ export class GameRoom {
     this.rounds.length = 0;
     this.keptRoundIds.clear();
     this.round = 0;
-    this.totalRounds = this.maxPlayers;
+    this.totalRounds = GAME.matchRounds;
     this.drawerTurns.clear();
     this.rebuildDrawerOrder();
     for (const player of this.players.values()) {
@@ -407,7 +408,7 @@ export class GameRoom {
   view(): RoomView {
     return {
       id: this.id, name: this.name, phase: this.phase, playerCount: this.connectedPlayerCount(), maxPlayers: this.maxPlayers,
-      category: this.category, isPrivate: this.isPrivate, matchRounds: this.maxPlayers,
+      category: this.category, isPrivate: this.isPrivate, matchRounds: GAME.matchRounds,
       roundSeconds: Math.round(this.roundMs / 1000), players: this.sortedPlayers(), hostId: this.hostId,
       drawerId: this.drawerId, round: this.round, totalRounds: this.totalRounds, deadline: this.deadline,
       hints: [...this.hints], strokes: [...this.strokes], canvasRatio: this.canvasRatio,
@@ -428,8 +429,7 @@ export class GameRoom {
   currentReveal(): RoundResult | null { return this.phase === 'reveal' ? this.rounds.at(-1) ?? null : null; }
   matchResult(): MatchResult | null {
     if (this.phase !== 'afterparty') return null;
-    const standings = this.sortedPlayers();
-    return { roomId: this.id, rounds: [...this.rounds], standings, winner: standings[0] ?? null };
+    return this.buildMatchResult();
   }
   isEmpty(): boolean { return this.players.size === 0; }
   close(): void { this.clearTimer(); this.listeners.clear(); }
@@ -438,8 +438,7 @@ export class GameRoom {
     this.clearTimer();
     this.phase = 'afterparty';
     this.deadline = null;
-    const standings = this.sortedPlayers();
-    this.emit('complete', { roomId: this.id, rounds: [...this.rounds], standings, winner: standings[0] ?? null });
+    this.emit('complete', this.buildMatchResult());
     this.emitState();
   }
 
@@ -475,6 +474,34 @@ export class GameRoom {
     return [...this.players.values()].filter((player) => player.connected && player.id !== this.drawerId).every((player) => this.correct.has(player.id));
   }
   private sortedPlayers(): PlayerView[] { return [...this.players.values()].map((player) => this.playerView(player)).sort((a, b) => b.score - a.score); }
+  private buildMatchResult(): MatchResult {
+    const metrics = new Map([...this.players.keys()].map((playerId) => [playerId, { correct: 0, elapsedMs: 0 }]));
+    for (const guess of this.rounds.flatMap((round) => round.correct)) {
+      const value = metrics.get(guess.playerId);
+      if (value) { value.correct += 1; value.elapsedMs += guess.elapsedMs; }
+    }
+    const standings = [...this.players.values()].map((player) => this.playerView(player)).sort((a, b) => {
+      const aMetric = metrics.get(a.id) ?? { correct: 0, elapsedMs: 0 };
+      const bMetric = metrics.get(b.id) ?? { correct: 0, elapsedMs: 0 };
+      return b.score - a.score || bMetric.correct - aMetric.correct || aMetric.elapsedMs - bMetric.elapsedMs;
+    });
+    const leader = standings[0] ?? null;
+    const leaderMetric = leader ? metrics.get(leader.id) ?? { correct: 0, elapsedMs: 0 } : null;
+    const winners = !leader || !leaderMetric ? [] : standings.filter((player) => {
+      const metric = metrics.get(player.id) ?? { correct: 0, elapsedMs: 0 };
+      return player.score === leader.score && metric.correct === leaderMetric.correct && metric.elapsedMs === leaderMetric.elapsedMs;
+    });
+    const runnerUp = standings[winners.length] ?? null;
+    const runnerMetric = runnerUp ? metrics.get(runnerUp.id) ?? { correct: 0, elapsedMs: 0 } : null;
+    const tieBreak = winners.length > 1
+      ? { rule: 'shared' as const, label: 'Still tied after points, correct guesses and total solve time — shared champions.' }
+      : !leader || !runnerUp || leader.score !== runnerUp.score
+        ? { rule: 'points' as const, label: 'Highest score took the crown.' }
+        : leaderMetric!.correct !== runnerMetric!.correct
+          ? { rule: 'correct-guesses' as const, label: 'Score tied — more correct guesses broke it.' }
+          : { rule: 'fastest-total' as const, label: 'Score and solves tied — fastest combined solve time won.' };
+    return { roomId: this.id, rounds: [...this.rounds], standings, winner: winners[0] ?? null, winners, tieBreak };
+  }
   private playerView(player: PlayerRecord): PlayerView {
     const cosmeticSeed = player.avatarItem === 'yellow-weirdo-avatar' || player.avatarItem === 'golden-chaos-avatar' ? 1 : player.avatarItem === 'green-chaos-avatar' ? 2 : player.avatarSeed;
     return { id: player.id, sessionId: player.sessionId, name: player.name, avatarSeed: cosmeticSeed, avatarItem: player.avatarItem, score: player.score,

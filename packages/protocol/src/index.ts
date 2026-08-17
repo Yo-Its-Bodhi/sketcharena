@@ -87,6 +87,11 @@ export interface MatchResult {
   rounds: RoundResult[];
   standings: PlayerView[];
   winner: PlayerView | null;
+  winners: PlayerView[];
+  tieBreak: {
+    rule: 'points' | 'correct-guesses' | 'fastest-total' | 'shared';
+    label: string;
+  };
 }
 
 export type RewardKind = 'mint-credit' | 'mint-discount' | 'xp' | 'item' | 'achievement' | 'battle-pass';
