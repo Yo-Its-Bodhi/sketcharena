@@ -3,7 +3,12 @@ dist/
 *.tsbuildinfo
 .env
 .env.*
+!.env.example
 coverage/
 *.log
 .data/
+.hardhat-home/
+.hardhat-local/
+.hardhat-cache/
+.hardhat-artifacts/
 .DS_Store

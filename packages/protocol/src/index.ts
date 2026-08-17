@@ -1,8 +1,10 @@
 export type RoomPhase = 'lobby' | 'paused' | 'countdown' | 'drawing' | 'reveal' | 'afterparty';
 export type CanvasRatio = 'square' | 'portrait' | 'landscape';
 export type DrawTool = 'pencil' | 'eraser' | 'fill';
+export type BrushStyle = 'pencil' | 'ink' | 'marker' | 'airbrush' | 'charcoal' | 'technical' | 'watercolor' | 'pastel' | 'pixel' | 'calligraphy' | 'neon';
+export type StrokeShape = 'freehand' | 'line' | 'rectangle' | 'ellipse' | 'arrow' | 'triangle';
 
-export interface Point { x: number; y: number; }
+export interface Point { x: number; y: number; pressure?: number; }
 
 export interface Stroke {
   id: string;
@@ -11,6 +13,10 @@ export interface Stroke {
   size: number;
   points: Point[];
   at: number;
+  brush?: BrushStyle;
+  shape?: StrokeShape;
+  opacity?: number;
+  smoothing?: number;
 }
 
 export interface PlayerView {
@@ -18,6 +24,7 @@ export interface PlayerView {
   sessionId: string;
   name: string;
   avatarSeed: number;
+  avatarItem?: string;
   score: number;
   roundScore: number;
   streak: number;
@@ -25,6 +32,7 @@ export interface PlayerView {
   isDrawer: boolean;
   hasGuessed: boolean;
   connected: boolean;
+  ready: boolean;
 }
 
 export interface RoomSummary {
@@ -35,6 +43,8 @@ export interface RoomSummary {
   maxPlayers: number;
   category: string;
   isPrivate: boolean;
+  matchRounds: number;
+  roundSeconds: number;
 }
 
 export interface RoomView extends RoomSummary {
@@ -79,8 +89,103 @@ export interface MatchResult {
   winner: PlayerView | null;
 }
 
+export type RewardKind = 'mint-credit' | 'mint-discount' | 'xp' | 'item' | 'achievement' | 'battle-pass';
+export interface RewardEntitlement {
+  id: string;
+  kind: RewardKind;
+  amount: number;
+  itemId?: string;
+  discountBps?: number;
+  reason: string;
+  campaignId?: string;
+  grantedAt: number;
+  expiresAt?: number;
+  redeemedAmount?: number;
+  redeemedAt?: number;
+  acknowledgedAt?: number;
+}
+export interface PlayerProgress {
+  sessionId: string;
+  name: string;
+  seasonId: string;
+  xp: number;
+  level: number;
+  battlePass: 'free' | 'premium';
+  achievements: string[];
+  items: string[];
+  equipped: { avatar?: string; brush?: string };
+  rewards: RewardEntitlement[];
+  firstSeenAt: number;
+  lastSeenAt: number;
+}
+export interface SeasonItemDefinition { id: string; name: string; description: string; slot: 'avatar' | 'brush'; rarity: 'common' | 'rare' | 'epic' | 'legendary'; previewColor: string; }
+
+export type ModerationReportCategory = 'harassment' | 'hate-or-threats' | 'spam' | 'cheating' | 'unsafe-art' | 'other';
+export type ModerationReportStatus = 'open' | 'reviewing' | 'resolved' | 'dismissed';
+export interface ModerationReport {
+  id: string;
+  roomId: string;
+  roomName: string;
+  reporterSessionId: string;
+  reporterName: string;
+  targetSessionId: string;
+  targetPlayerId: string;
+  targetName: string;
+  category: ModerationReportCategory;
+  detail: string;
+  status: ModerationReportStatus;
+  createdAt: number;
+  updatedAt: number;
+  handledBy?: string;
+  resolutionNote?: string;
+}
+
 export type ArtworkOrigin = 'arena' | 'studio';
 export type ArtworkStatus = 'draft' | 'gallery' | 'mint-ready' | 'minted';
+export type MintStatus = 'prepared' | 'submitted' | 'confirmed' | 'failed' | 'expired';
+
+export interface PanicArchiveVoucher {
+  recipient: `0x${string}`;
+  tokenURIHash: `0x${string}`;
+  artworkHash: `0x${string}`;
+  price: string;
+  nonce: string;
+  deadline: string;
+  seasonId: number;
+  campaignId: `0x${string}`;
+}
+
+export interface MintPreparation {
+  id: string;
+  artworkId: string;
+  status: MintStatus;
+  walletAddress: `0x${string}`;
+  contractAddress: `0x${string}`;
+  chainId: number;
+  chainName: string;
+  nativeCurrency: { name: string; symbol: string; decimals: number };
+  rpcUrls: string[];
+  blockExplorerUrl?: string;
+  marketplaceUrl?: string;
+  mediaURI: string;
+  tokenURI: string;
+  voucher: PanicArchiveVoucher;
+  signature: `0x${string}`;
+  transactionRequest: { to: `0x${string}`; from: `0x${string}`; value: `0x${string}`; data: `0x${string}` };
+  usesMintCredit: boolean;
+  discountBps?: number;
+  expiresAt: number;
+  transactionHash?: `0x${string}`;
+  tokenId?: string;
+  error?: string;
+}
+
+export interface WalletChallenge {
+  challengeId: string;
+  address: `0x${string}`;
+  message: string;
+  expiresAt: number;
+}
 
 export interface ArtworkDocument {
   id: string;
@@ -99,10 +204,34 @@ export interface ArtworkDocument {
   updatedAt: number;
   mint?: {
     network: 'shido';
+    status?: MintStatus;
+    walletAddress?: `0x${string}`;
+    contractAddress?: `0x${string}`;
+    tokenURI?: string;
     tokenId?: string;
     transactionHash?: string;
     marketplaceUrl?: string;
   };
+}
+
+export interface PanicArchiveItem {
+  id: string;
+  title: string;
+  description: string;
+  origin: ArtworkOrigin;
+  canvasRatio: CanvasRatio;
+  width: number;
+  height: number;
+  strokes: Stroke[];
+  createdAt: number;
+  mintedAt: number;
+  seasonId: number;
+  seasonName: string;
+  tokenId: string;
+  contractAddress: `0x${string}`;
+  transactionHash: string;
+  tokenURI: string;
+  marketplaceUrl?: string;
 }
 
 export interface ServerToClientEvents {
@@ -120,18 +249,26 @@ export interface ServerToClientEvents {
 
 export interface Ack<T = undefined> { ok: boolean; data?: T; error?: string; }
 
+export const DRAW_LIMITS = {
+  maxStrokes: 1_500,
+  maxPointsPerStroke: 250,
+} as const;
+
 export interface ClientToServerEvents {
-  'session:resume': (payload: { sessionId: string; name: string }, ack: (value: Ack<{ sessionId: string }>) => void) => void;
+  'session:resume': (payload: { credential?: string; name: string }, ack: (value: Ack<{ sessionId: string }>) => void) => void;
   'rooms:subscribe': () => void;
-  'room:create': (payload: { name: string; category: string; isPrivate?: boolean; maxPlayers?: number }, ack: (value: Ack<{ room: RoomView; inviteCode?: string }>) => void) => void;
+  'room:create': (payload: { name: string; category: string; isPrivate?: boolean; maxPlayers?: number; roundSeconds?: number }, ack: (value: Ack<{ room: RoomView; inviteCode?: string }>) => void) => void;
   'room:join': (payload: { roomId?: string; inviteCode?: string }, ack: (value: Ack<{ room: RoomView }>) => void) => void;
   'room:leave': (ack: (value: Ack) => void) => void;
+  'player:ready': (payload: { ready: boolean }, ack: (value: Ack) => void) => void;
+  'player:kick': (payload: { playerId: string }, ack: (value: Ack) => void) => void;
+  'player:report': (payload: { playerId: string; category: ModerationReportCategory; detail: string }, ack: (value: Ack<{ reportId: string }>) => void) => void;
   'game:start': (ack: (value: Ack) => void) => void;
   'game:rematch': (ack: (value: Ack) => void) => void;
   'guess:submit': (payload: { text: string }, ack: (value: Ack) => void) => void;
   'chat:send': (payload: { text: string }, ack: (value: Ack) => void) => void;
   'reaction:send': (payload: { emoji: string }, ack: (value: Ack) => void) => void;
-  'draw:stroke': (stroke: Stroke) => void;
+  'draw:stroke': (stroke: Stroke, ack: (value: Ack) => void) => void;
   'draw:preview': (stroke: Stroke) => void;
   'draw:clear': () => void;
   'draw:undo': () => void;

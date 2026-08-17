@@ -1,0 +1,27 @@
+[Unit]
+Description=Sketch Arena authoritative game server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sketcharena
+Group=sketcharena
+WorkingDirectory=/srv/sketch-arena
+EnvironmentFile=/etc/sketch-arena/server.env
+ExecStartPre=/usr/bin/node /srv/sketch-arena/scripts/migrate-postgres.mjs
+ExecStart=/usr/bin/node /srv/sketch-arena/apps/server/dist/index.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=12
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sketch-arena
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,16 +1,41 @@
 {
   "name": "sketch-arena-reborn",
   "private": true,
+  "type": "module",
   "version": "0.1.0",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "concurrently -n server,web -c magenta,cyan \"npm run dev -w @sketch-arena/server\" \"npm run dev -w @sketch-arena/web\"",
     "build": "npm run build -w @sketch-arena/protocol && npm run build -w @sketch-arena/server && npm run build -w @sketch-arena/web",
-    "test": "npm run build -w @sketch-arena/protocol && npm run test -w @sketch-arena/server",
-    "check": "npm run build && npm run test"
+    "lint": "eslint .",
+    "test": "npm run build -w @sketch-arena/protocol && npm run test -w @sketch-arena/server && npm run test -w @sketch-arena/web",
+    "contract:compile": "node scripts/compile-panic-archive.mjs",
+    "contract:test:live": "node scripts/test-panic-archive.mjs",
+    "contract:test:ci": "node scripts/test-contract-ci.mjs",
+    "ops:backup": "node scripts/backup-data.mjs",
+    "ops:backup:verify": "node scripts/backup-data.mjs --verify",
+    "ops:backup:postgres": "node scripts/backup-postgres.mjs",
+    "ops:backup:postgres:verify": "node scripts/backup-postgres.mjs --verify",
+    "ops:test": "node --test scripts/backup-data.test.mjs scripts/backup-postgres.test.mjs scripts/import-json-to-postgres.integration.test.mjs scripts/migrate-postgres.test.mjs",
+    "db:migrate": "node scripts/migrate-postgres.mjs",
+    "db:import:legacy": "node scripts/import-json-to-postgres.mjs",
+    "qa:load": "npm run build -w @sketch-arena/protocol && npm run build -w @sketch-arena/server && node scripts/load-test.mjs",
+    "check": "npm run lint && npm run build && npm run test && npm run ops:test"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@openzeppelin/contracts": "^4.9.6",
     "concurrently": "^9.2.1",
-    "typescript": "^5.9.3"
+    "eslint": "^10.8.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "ethers": "^6.15.0",
+    "globals": "^17.11.0",
+    "hardhat": "^3.13.0",
+    "solc": "^0.8.26",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.67.0"
   }
 }

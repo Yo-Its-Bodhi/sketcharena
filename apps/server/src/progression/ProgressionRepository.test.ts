@@ -1,0 +1,76 @@
+import { describe, expect, it } from 'vitest';
+import { MemoryProgressionRepository } from './ProgressionRepository.js';
+
+describe('ProgressionRepository', () => {
+  it('grants idempotent Mint Credits and records the operator action', async () => {
+    const repository = new MemoryProgressionRepository(() => 1234);
+    const player = await repository.ensurePlayer('11111111-1111-4111-8111-111111111111', 'Dru');
+    const grant = { sessionIds: [player.sessionId], kind: 'mint-credit' as const, amount: 3, reason: 'Season 0 thank you',
+      campaignId: 'season-0-thanks', idempotencyKey: 'grant-season-0-thanks-v1', actor: 'admin:test' };
+
+    expect(await repository.grant(grant)).toEqual({ granted: 1, skipped: 0 });
+    expect(await repository.grant(grant)).toEqual({ granted: 0, skipped: 1 });
+    const grantedReward = (await repository.getPlayer(player.sessionId))?.rewards.find((reward) => reward.campaignId === 'season-0-thanks');
+    expect(grantedReward).toMatchObject({ kind: 'mint-credit', amount: 3 });
+    expect(await repository.audit()).toHaveLength(1);
+    expect((await repository.acknowledge(player.sessionId, grantedReward!.id)).rewards.find((reward) => reward.id === grantedReward!.id)?.acknowledgedAt).toBe(1234);
+  });
+
+  it('gives every player exactly one first-mint credit, including older profiles', async () => {
+    const repository = new MemoryProgressionRepository(() => 4321);
+    const first = await repository.ensurePlayer('33333333-3333-4333-8333-333333333333', 'Chaos');
+    const resumed = await repository.ensurePlayer(first.sessionId, 'Chaos Renamed');
+    expect(resumed.rewards.filter((reward) => reward.campaignId === 'first-panic-archive-mint')).toHaveLength(1);
+    expect(resumed.rewards[0]).toMatchObject({ kind: 'mint-credit', amount: 1, reason: 'Your first Panic Archive mint is on us.' });
+  });
+
+  it('updates earned progression without duplicating achievement items', async () => {
+    const repository = new MemoryProgressionRepository();
+    const player = await repository.ensurePlayer('22222222-2222-4222-8222-222222222222', 'Bodhi');
+    await repository.grant({ sessionIds: [player.sessionId], kind: 'achievement', amount: 1, itemId: 'founders-scribble', reason: 'Early player', campaignId: 'founders', idempotencyKey: 'founders-1', actor: 'admin:test' });
+    await repository.grant({ sessionIds: [player.sessionId], kind: 'achievement', amount: 1, itemId: 'founders-scribble', reason: 'Duplicate attempt', campaignId: 'founders', idempotencyKey: 'founders-2', actor: 'admin:test' });
+    expect((await repository.getPlayer(player.sessionId))?.achievements).toEqual(['founders-scribble']);
+  });
+
+  it('unlocks each crossed Season 0 tier once', async () => {
+    const repository = new MemoryProgressionRepository(() => 9876);
+    const player = await repository.ensurePlayer('44444444-4444-4444-8444-444444444444', 'Minty');
+    await repository.grant({ sessionIds: [player.sessionId], kind: 'xp', amount: 4_000, reason: 'Match XP', campaignId: 'match-one', idempotencyKey: 'match-one-xp', actor: 'system:match' });
+    const progressed = (await repository.getPlayer(player.sessionId))!;
+    expect(progressed.level).toBe(5);
+    expect(progressed.items).toEqual(['yellow-weirdo-avatar', 'panic-pencil']);
+    expect(progressed.rewards.filter((reward) => reward.campaignId?.startsWith('season-0-level-'))).toHaveLength(3);
+    expect(progressed.rewards.find((reward) => reward.campaignId === 'season-0-level-3')).toMatchObject({ kind: 'mint-credit', amount: 1 });
+    await repository.grant({ sessionIds: [player.sessionId], kind: 'xp', amount: 1, reason: 'More XP', campaignId: 'match-two', idempotencyKey: 'match-two-xp', actor: 'system:match' });
+    expect((await repository.getPlayer(player.sessionId))?.rewards.filter((reward) => reward.campaignId?.startsWith('season-0-level-'))).toHaveLength(3);
+  });
+
+  it('unlocks premium tiers retroactively and equips only owned catalog cosmetics', async () => {
+    const repository = new MemoryProgressionRepository(() => 12_345);
+    const player = await repository.ensurePlayer('66666666-6666-4666-8666-666666666666', 'Pass Gremlin');
+    await repository.grant({ sessionIds: [player.sessionId], kind: 'xp', amount: 4_000, reason: 'Already played', campaignId: 'old-xp', idempotencyKey: 'old-xp-key', actor: 'system:match' });
+    await repository.grant({ sessionIds: [player.sessionId], kind: 'battle-pass', amount: 1, reason: 'Premium Panic Pass purchase', campaignId: 'season-0-pass', idempotencyKey: 'pass-order-1', actor: 'system:checkout' });
+    const premium = (await repository.getPlayer(player.sessionId))!;
+    expect(premium.battlePass).toBe('premium');
+    expect(premium.items).toEqual(expect.arrayContaining(['green-chaos-avatar', 'neon-panic-brush']));
+    expect(premium.rewards.filter((reward) => reward.campaignId?.startsWith('season-0-premium-level-'))).toHaveLength(3);
+    await expect(repository.equipItem(player.sessionId, 'golden-chaos-avatar')).rejects.toThrow('not unlocked');
+    expect((await repository.equipItem(player.sessionId, 'green-chaos-avatar')).equipped.avatar).toBe('green-chaos-avatar');
+    expect((await repository.equipItem(player.sessionId, 'neon-panic-brush')).equipped.brush).toBe('neon-panic-brush');
+    await expect(repository.equipItem(player.sessionId, 'made-up-hat')).rejects.toThrow('Unknown');
+  });
+
+  it('consumes multi-use Mint Credits one unit at a time and idempotently', async () => {
+    const repository = new MemoryProgressionRepository(() => 7777);
+    const player = await repository.ensurePlayer('55555555-5555-4555-8555-555555555555', 'Voucher Goblin');
+    await repository.grant({ sessionIds: [player.sessionId], kind: 'mint-credit', amount: 2, reason: 'Two trophies', campaignId: 'two-trophies', idempotencyKey: 'grant-two-trophies', actor: 'admin:test' });
+    const reward = (await repository.getPlayer(player.sessionId))!.rewards.find((candidate) => candidate.campaignId === 'two-trophies')!;
+    await repository.consumeMintCredit(player.sessionId, reward.id, 'mint-one');
+    await repository.consumeMintCredit(player.sessionId, reward.id, 'mint-one');
+    const partlyUsed = (await repository.getPlayer(player.sessionId))!.rewards.find((candidate) => candidate.id === reward.id)!;
+    expect(partlyUsed.redeemedAmount).toBe(1); expect(partlyUsed.redeemedAt).toBeUndefined();
+    await repository.consumeMintCredit(player.sessionId, reward.id, 'mint-two');
+    expect((await repository.getPlayer(player.sessionId))!.rewards.find((candidate) => candidate.id === reward.id)).toMatchObject({ redeemedAmount: 2, redeemedAt: 7777 });
+    await expect(repository.consumeMintCredit(player.sessionId, reward.id, 'mint-three')).rejects.toThrow('unavailable');
+  });
+});

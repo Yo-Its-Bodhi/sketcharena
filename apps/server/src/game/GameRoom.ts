@@ -1,17 +1,16 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import type { CanvasRatio, FeedItem, MatchResult, PlayerView, RoomPhase, RoomView, RoundResult, Stroke } from '@sketch-arena/protocol';
+import { DRAW_LIMITS, type CanvasRatio, type FeedItem, type MatchResult, type PlayerView, type RoomPhase, type RoomSummary, type RoomView, type RoundResult, type Stroke } from '@sketch-arena/protocol';
 import { randomWord } from '../words.js';
 
 export const GAME = {
   minPlayers: 2,
   maxPlayers: 8,
-  roundsPerPlayer: 1,
   countdownMs: 3_000,
   roundMs: 45_000,
   revealMs: 8_000,
   reconnectMs: 20_000,
-  maxStrokes: 1_500,
-  maxPointsPerStroke: 250,
+  maxStrokes: DRAW_LIMITS.maxStrokes,
+  maxPointsPerStroke: DRAW_LIMITS.maxPointsPerStroke,
 } as const;
 
 interface PlayerRecord {
@@ -20,12 +19,14 @@ interface PlayerRecord {
   sessionId: string;
   name: string;
   avatarSeed: number;
+  avatarItem?: string;
   score: number;
   roundScore: number;
   streak: number;
   maxStreak: number;
   connected: boolean;
   disconnectAt: number | null;
+  ready: boolean;
 }
 
 export interface RoomEventMap {
@@ -62,7 +63,10 @@ export class GameRoom {
   correct = new Map<string, { playerName: string; points: number; elapsedMs: number }>();
   funnyGuesses: FeedItem[] = [];
   private drawerOrder: string[] = [];
+  private drawerTurns = new Map<string, number>();
+  private kickedSessions = new Set<string>();
   private startedAt = 0;
+  private pausedRoundRemainingMs: number | null = null;
   private timer: NodeJS.Timeout | null = null;
   private hintTimers: NodeJS.Timeout[] = [];
   private listeners = new Map<keyof RoomEventMap, Set<RoomEventMap[keyof RoomEventMap]>>();
@@ -72,6 +76,7 @@ export class GameRoom {
     readonly category = 'chaos',
     readonly isPrivate = false,
     readonly maxPlayers: number = GAME.maxPlayers,
+    readonly roundMs: number = GAME.roundMs,
     private readonly clock: () => number = Date.now,
     private readonly random: () => number = Math.random,
   ) {
@@ -93,22 +98,27 @@ export class GameRoom {
     set?.forEach((handler) => handler(...args));
   }
 
-  join(sessionId: string, socketId: string, name: string): PlayerView {
+  join(sessionId: string, socketId: string, name: string, avatarItem?: string): PlayerView {
+    if (this.kickedSessions.has(sessionId)) throw new Error('The host removed you from this arena');
     const returning = [...this.players.values()].find((player) => player.sessionId === sessionId);
     if (returning) {
       returning.socketId = socketId;
       returning.connected = true;
       returning.disconnectAt = null;
       returning.name = name;
-      if (this.phase === 'paused' && this.connectedPlayerCount() >= GAME.minPlayers) this.beginCountdown();
+      returning.avatarItem = avatarItem;
+      if (this.phase === 'paused' && this.connectedPlayerCount() >= GAME.minPlayers) {
+        if (this.pausedRoundRemainingMs !== null) this.resumeDrawing();
+        else this.beginCountdown();
+      }
       else this.emitState();
       return this.playerView(returning);
     }
     if (this.phase !== 'lobby') throw new Error('This match is already underway');
     if (this.players.size >= this.maxPlayers) throw new Error('The arena is full');
     const player: PlayerRecord = {
-      id: randomUUID().slice(0, 12), socketId, sessionId, name, avatarSeed: Math.floor(this.random() * 10_000),
-      score: 0, roundScore: 0, streak: 0, maxStreak: 0, connected: true, disconnectAt: null,
+      id: randomUUID().slice(0, 12), socketId, sessionId, name, avatarSeed: Math.floor(this.random() * 10_000), avatarItem,
+      score: 0, roundScore: 0, streak: 0, maxStreak: 0, connected: true, disconnectAt: null, ready: false,
     };
     this.players.set(player.id, player);
     this.hostId ??= player.id;
@@ -117,37 +127,77 @@ export class GameRoom {
     return this.playerView(player);
   }
 
-  leaveBySession(sessionId: string): void {
+  leaveBySession(sessionId: string, departureMessage?: string): void {
     const player = this.bySession(sessionId);
     if (!player) return;
     const wasDrawer = player.id === this.drawerId;
     this.players.delete(player.id);
     this.drawerOrder = this.drawerOrder.filter((id) => id !== player.id);
+    this.drawerTurns.delete(player.id);
     this.correct.delete(player.id);
     if (this.hostId === player.id) this.hostId = this.players.keys().next().value ?? null;
-    this.emit('feed', this.system(`${player.name} left the arena`));
+    this.emit('feed', this.system(departureMessage ?? `${player.name} left the arena`));
 
     if (wasDrawer && this.phase === 'drawing') this.finishRound('drawer-left');
-    else if (this.phase !== 'lobby' && this.connectedPlayerCount() < GAME.minPlayers) this.resetToLobby('Waiting for more players');
-    else this.emitState();
+    else if (this.phase !== 'lobby' && this.phase !== 'reveal' && this.connectedPlayerCount() < GAME.minPlayers) this.resetToLobby('Waiting for more players');
+    else {
+      if (this.phase !== 'lobby' && this.phase !== 'afterparty') this.rebuildDrawerOrder();
+      this.emitState();
+    }
   }
 
-  disconnect(sessionId: string): void {
+  disconnect(sessionId: string, socketId?: string): void {
     const player = this.bySession(sessionId);
     if (!player) return;
+    // A resumed session replaces its old transport. The old socket may emit a
+    // late disconnect after the replacement is already live; never let that
+    // stale event knock the current player offline.
+    if (socketId && player.socketId !== socketId) return;
     player.socketId = null;
     player.connected = false;
     player.disconnectAt = this.clock();
     this.emit('feed', this.system(`${player.name} lost connection — holding their seat`));
-    this.emitState();
+    if (this.phase === 'drawing' && (player.id === this.drawerId || this.connectedPlayerCount() < GAME.minPlayers)) this.pauseDrawing();
+    else this.emitState();
   }
 
   removeExpiredDisconnects(now = this.clock()): void {
     for (const player of [...this.players.values()]) {
       if (!player.connected && player.disconnectAt !== null && now - player.disconnectAt >= GAME.reconnectMs) {
+        if (this.phase === 'paused' && this.pausedRoundRemainingMs !== null && player.id === this.drawerId) {
+          this.phase = 'drawing'; this.pausedRoundRemainingMs = null; this.finishRound('drawer-left');
+        }
         this.leaveBySession(player.sessionId);
       }
     }
+  }
+
+  setReady(sessionId: string, ready: boolean): void {
+    if (this.phase !== 'lobby') throw new Error('Ready state is only available in the lobby');
+    const player = this.bySession(sessionId);
+    if (!player || !player.connected) throw new Error('Player not found');
+    player.ready = ready;
+    this.emit('feed', this.system(`${player.name} is ${ready ? 'ready to make a mess' : 'not ready yet'}`));
+    this.emitState();
+  }
+
+  kick(requestingSessionId: string, targetPlayerId: string): { sessionId: string; socketId: string | null; name: string } {
+    const requester = this.bySession(requestingSessionId);
+    if (!requester || requester.id !== this.hostId) throw new Error('Only the host can remove a player');
+    const target = this.players.get(targetPlayerId);
+    if (!target) throw new Error('Player not found');
+    if (target.id === this.hostId) throw new Error('The host cannot remove themselves');
+    const removed = { sessionId: target.sessionId, socketId: target.socketId, name: target.name };
+    this.kickedSessions.add(target.sessionId);
+    this.leaveBySession(target.sessionId, `${target.name} was removed by the host`);
+    return removed;
+  }
+
+  reportTarget(requestingSessionId: string, targetPlayerId: string): { reporterSessionId: string; reporterName: string; targetSessionId: string; targetPlayerId: string; targetName: string } {
+    const reporter = this.bySession(requestingSessionId); if (!reporter) throw new Error('Player not found');
+    const target = this.players.get(targetPlayerId); if (!target) throw new Error('Reported player is no longer in this arena');
+    if (target.sessionId === reporter.sessionId) throw new Error('You cannot report yourself');
+    return { reporterSessionId: reporter.sessionId, reporterName: reporter.name, targetSessionId: target.sessionId, targetPlayerId: target.id, targetName: target.name };
   }
 
   start(requestingSessionId: string): void {
@@ -158,10 +208,11 @@ export class GameRoom {
     this.rounds.length = 0;
     this.keptRoundIds.clear();
     this.round = 0;
-    this.totalRounds = this.connectedPlayerCount() * GAME.roundsPerPlayer;
-    this.drawerOrder = this.shuffle([...this.players.values()].filter((player) => player.connected).map((player) => player.id));
+    this.totalRounds = this.maxPlayers;
+    this.drawerTurns.clear();
+    this.rebuildDrawerOrder();
     for (const player of this.players.values()) {
-      player.score = 0; player.roundScore = 0; player.streak = 0; player.maxStreak = 0;
+      player.score = 0; player.roundScore = 0; player.streak = 0; player.maxStreak = 0; player.ready = false;
     }
     this.beginCountdown();
   }
@@ -170,7 +221,7 @@ export class GameRoom {
     const requester = this.bySession(requestingSessionId);
     if (!requester || requester.id !== this.hostId) throw new Error('Only the host can call the rematch');
     if (this.phase !== 'afterparty') throw new Error('Finish this match first');
-    this.rounds.length = 0; this.keptRoundIds.clear(); this.round = 0; this.totalRounds = 0;
+    this.rounds.length = 0; this.keptRoundIds.clear(); this.round = 0; this.totalRounds = 0; this.drawerTurns.clear();
     for (const player of this.players.values()) { player.score = 0; player.roundScore = 0; player.streak = 0; player.maxStreak = 0; }
     this.resetToLobby('Same crew. Fresh disasters.');
   }
@@ -188,26 +239,54 @@ export class GameRoom {
       }
       return this.resetToLobby('Waiting for more players');
     }
-    if (this.round >= this.totalRounds || this.drawerOrder.length === 0) return this.completeMatch();
+    if (this.round >= this.totalRounds) return this.completeMatch();
+    if (this.drawerOrder.length === 0) this.rebuildDrawerOrder();
+    if (this.drawerOrder.length === 0) return this.completeMatch();
     this.phase = 'countdown';
     this.deadline = this.clock() + GAME.countdownMs;
     this.emitState();
     this.timer = setTimeout(() => this.beginRound(), GAME.countdownMs);
   }
 
+  private pauseDrawing(): void {
+    this.pausedRoundRemainingMs = Math.max(1_000, (this.deadline ?? this.clock()) - this.clock());
+    this.clearTimer();
+    this.phase = 'paused';
+    const heldSeats = [...this.players.values()].filter((player) => !player.connected && player.disconnectAt !== null);
+    this.deadline = Math.min(...heldSeats.map((player) => player.disconnectAt! + GAME.reconnectMs));
+    this.emitState();
+  }
+
+  private resumeDrawing(): void {
+    const remaining = this.pausedRoundRemainingMs;
+    if (remaining === null) return this.beginCountdown();
+    this.clearTimer(); this.pausedRoundRemainingMs = null; this.phase = 'drawing';
+    this.startedAt = this.clock() - (this.roundMs - remaining); this.deadline = this.clock() + remaining;
+    const drawer = this.drawerId ? this.players.get(this.drawerId) : undefined;
+    if (!drawer?.socketId) return this.pauseDrawing();
+    this.emit('brief', drawer.socketId, { prompt: this.currentPrompt, round: this.round, totalRounds: this.totalRounds });
+    this.emitState();
+    this.hintTimers = [0.4, 0.75].map((portion) => setTimeout(() => this.revealHint(), remaining * portion));
+    this.timer = setTimeout(() => this.finishRound('time'), remaining);
+  }
+
   beginRound(): void {
     this.clearTimer();
     const drawerId = this.drawerOrder.shift();
     const drawer = drawerId ? this.players.get(drawerId) : undefined;
-    if (!drawer?.connected || !drawer.socketId) return this.beginCountdown();
+    if (!drawer?.connected || !drawer.socketId) {
+      this.rebuildDrawerOrder();
+      return this.beginCountdown();
+    }
 
     this.round += 1;
+    this.drawerTurns.set(drawer.id, (this.drawerTurns.get(drawer.id) ?? 0) + 1);
     this.phase = 'drawing';
     this.drawerId = drawer.id;
     this.currentPrompt = randomWord(this.category, this.random);
     this.currentRoundId = randomUUID();
     this.startedAt = this.clock();
-    this.deadline = this.startedAt + GAME.roundMs;
+    this.deadline = this.startedAt + this.roundMs;
     this.hints = [...this.currentPrompt].map((character) => character === ' ' ? ' ' : '•');
     this.strokes = [];
     this.correct.clear();
@@ -215,8 +294,8 @@ export class GameRoom {
     for (const player of this.players.values()) player.roundScore = 0;
     this.emit('brief', drawer.socketId, { prompt: this.currentPrompt, round: this.round, totalRounds: this.totalRounds });
     this.emitState();
-    this.hintTimers = [0.36, 0.68].map((portion) => setTimeout(() => this.revealHint(), GAME.roundMs * portion));
-    this.timer = setTimeout(() => this.finishRound('time'), GAME.roundMs);
+    this.hintTimers = [0.36, 0.68].map((portion) => setTimeout(() => this.revealHint(), this.roundMs * portion));
+    this.timer = setTimeout(() => this.finishRound('time'), this.roundMs);
   }
 
   submitGuess(sessionId: string, text: string): { correct: boolean; close: boolean } {
@@ -231,7 +310,7 @@ export class GameRoom {
 
     if (normalized === answer) {
       const elapsedMs = this.clock() - this.startedAt;
-      const urgency = Math.max(0, 1 - elapsedMs / GAME.roundMs);
+      const urgency = Math.max(0, 1 - elapsedMs / this.roundMs);
       const points = Math.round(100 + urgency * 400 + Math.min(player.streak * 25, 100));
       player.score += points;
       player.roundScore += points;
@@ -257,7 +336,10 @@ export class GameRoom {
 
   sendChat(sessionId: string, text: string): void {
     const player = this.bySession(sessionId);
-    if (!player) throw new Error('Player not found');
+    if (!player || !player.connected) throw new Error('Player not found');
+    if (this.phase === 'drawing' && player.id === this.drawerId) {
+      throw new Error('Chat is locked while you draw—keep the prompt secret');
+    }
     this.emit('feed', { id: randomUUID(), kind: 'chat', playerId: player.id, playerName: player.name, text: text.trim().slice(0, 160), at: this.clock() });
   }
 
@@ -299,6 +381,7 @@ export class GameRoom {
   finishRound(reason: RoundResult['reason']): void {
     if (this.phase !== 'drawing') return;
     this.clearTimer();
+    this.pausedRoundRemainingMs = null;
     this.phase = 'reveal';
     this.deadline = this.clock() + GAME.revealMs;
     const drawer = this.drawerId ? this.players.get(this.drawerId) : undefined;
@@ -324,14 +407,20 @@ export class GameRoom {
   view(): RoomView {
     return {
       id: this.id, name: this.name, phase: this.phase, playerCount: this.connectedPlayerCount(), maxPlayers: this.maxPlayers,
-      category: this.category, isPrivate: this.isPrivate, players: this.sortedPlayers(), hostId: this.hostId,
+      category: this.category, isPrivate: this.isPrivate, matchRounds: this.maxPlayers,
+      roundSeconds: Math.round(this.roundMs / 1000), players: this.sortedPlayers(), hostId: this.hostId,
       drawerId: this.drawerId, round: this.round, totalRounds: this.totalRounds, deadline: this.deadline,
       hints: [...this.hints], strokes: [...this.strokes], canvasRatio: this.canvasRatio,
     };
   }
 
-  summary() { const { players: _players, ...summary } = this.view(); return summary; }
+  summary(): RoomSummary {
+    const view = this.view();
+    return { id: view.id, name: view.name, phase: view.phase, playerCount: view.playerCount, maxPlayers: view.maxPlayers, category: view.category, isPrivate: view.isPrivate, matchRounds: view.matchRounds, roundSeconds: view.roundSeconds };
+  }
   hasSession(sessionId: string): boolean { return Boolean(this.bySession(sessionId)); }
+  ownsSocket(sessionId: string, socketId: string): boolean { return this.bySession(sessionId)?.socketId === socketId; }
+  socketIdForSession(sessionId: string): string | null { return this.bySession(sessionId)?.socketId ?? null; }
   currentBriefForSession(sessionId: string): { prompt: string; round: number; totalRounds: number } | null {
     return this.phase === 'drawing' && this.bySession(sessionId)?.id === this.drawerId
       ? { prompt: this.currentPrompt, round: this.round, totalRounds: this.totalRounds } : null;
@@ -356,7 +445,7 @@ export class GameRoom {
 
   private resetToLobby(message: string): void {
     this.clearTimer();
-    this.phase = 'lobby'; this.drawerId = null; this.deadline = null; this.currentPrompt = ''; this.strokes = [];
+    this.phase = 'lobby'; this.drawerId = null; this.deadline = null; this.currentPrompt = ''; this.strokes = []; this.pausedRoundRemainingMs = null;
     this.emit('feed', this.system(message));
     this.emitState();
   }
@@ -387,9 +476,10 @@ export class GameRoom {
   }
   private sortedPlayers(): PlayerView[] { return [...this.players.values()].map((player) => this.playerView(player)).sort((a, b) => b.score - a.score); }
   private playerView(player: PlayerRecord): PlayerView {
-    return { id: player.id, sessionId: player.sessionId, name: player.name, avatarSeed: player.avatarSeed, score: player.score,
+    const cosmeticSeed = player.avatarItem === 'yellow-weirdo-avatar' || player.avatarItem === 'golden-chaos-avatar' ? 1 : player.avatarItem === 'green-chaos-avatar' ? 2 : player.avatarSeed;
+    return { id: player.id, sessionId: player.sessionId, name: player.name, avatarSeed: cosmeticSeed, avatarItem: player.avatarItem, score: player.score,
       roundScore: player.roundScore, streak: player.streak, isHost: player.id === this.hostId, isDrawer: player.id === this.drawerId,
-      hasGuessed: this.correct.has(player.id), connected: player.connected };
+      hasGuessed: this.correct.has(player.id), connected: player.connected, ready: player.ready };
   }
   private system(text: string): FeedItem { return { id: randomUUID(), kind: 'system', text, at: this.clock() }; }
   private shuffle(values: string[]): string[] {
@@ -398,6 +488,24 @@ export class GameRoom {
       [values[index], values[swap]] = [values[swap]!, values[index]!];
     }
     return values;
+  }
+  private rebuildDrawerOrder(): void {
+    const remaining = Math.max(0, this.totalRounds - this.round);
+    const connected = this.shuffle([...this.players.values()].filter((player) => player.connected).map((player) => player.id));
+    if (!remaining || !connected.length) { this.drawerOrder = []; return; }
+
+    const projected = new Map(connected.map((id) => [id, this.drawerTurns.get(id) ?? 0]));
+    const schedule: string[] = [];
+    let previous = this.drawerId;
+    for (let turn = 0; turn < remaining; turn += 1) {
+      const minimum = Math.min(...connected.map((id) => projected.get(id) ?? 0));
+      const tied = connected.filter((id) => (projected.get(id) ?? 0) === minimum);
+      const next = tied.find((id) => id !== previous) ?? tied[0]!;
+      schedule.push(next);
+      projected.set(next, (projected.get(next) ?? 0) + 1);
+      previous = next;
+    }
+    this.drawerOrder = schedule;
   }
 }
 

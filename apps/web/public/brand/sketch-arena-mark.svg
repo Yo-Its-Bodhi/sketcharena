@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Sketch Arena mascot mark</title>
+  <desc id="desc">Three hand-drawn yellow, mint and red faces huddled together.</desc>
+  <rect width="512" height="512" rx="112" fill="#171514"/>
+  <path d="M47 261C31 163 87 89 181 99c75 8 117 65 101 148-17 89-77 139-158 115-52-15-67-55-77-101Z" fill="#f2c94c" stroke="#fffaf0" stroke-width="18" stroke-linejoin="round"/>
+  <path d="M167 201C170 89 243 37 340 70c88 30 118 116 72 195-42 72-135 86-201 33-38-30-46-57-44-97Z" fill="#70d6a7" stroke="#fffaf0" stroke-width="18" stroke-linejoin="round"/>
+  <path d="M289 256c11-93 76-137 151-99 68 34 78 112 29 168-48 55-126 52-169-7-18-25-16-42-11-62Z" fill="#ff5f46" stroke="#fffaf0" stroke-width="18" stroke-linejoin="round"/>
+  <g fill="#fffaf0" stroke="#171514" stroke-width="12">
+    <ellipse cx="111" cy="220" rx="25" ry="27"/><ellipse cx="184" cy="208" rx="23" ry="25"/>
+    <ellipse cx="251" cy="153" rx="25" ry="28"/><ellipse cx="337" cy="145" rx="27" ry="25"/>
+    <ellipse cx="363" cy="238" rx="23" ry="25"/><ellipse cx="430" cy="247" rx="24" ry="27"/>
+  </g>
+  <g fill="#171514">
+    <circle cx="115" cy="221" r="9"/><circle cx="181" cy="209" r="9"/>
+    <circle cx="255" cy="154" r="9"/><circle cx="334" cy="147" r="9"/>
+    <circle cx="367" cy="239" r="9"/><circle cx="426" cy="248" r="9"/>
+  </g>
+  <path d="M109 282c27 24 59 20 79-5" fill="none" stroke="#171514" stroke-width="16" stroke-linecap="round"/>
+  <path d="M257 239c23-28 54-29 78-3" fill="none" stroke="#171514" stroke-width="16" stroke-linecap="round"/>
+  <path d="M361 298c25 28 55 27 79-2" fill="none" stroke="#171514" stroke-width="16" stroke-linecap="round"/>
+  <path d="M74 399h364" stroke="#f2c94c" stroke-width="18" stroke-linecap="round"/>
+  <path d="M112 431h286" stroke="#fffaf0" stroke-width="8" stroke-linecap="round" stroke-dasharray="18 18"/>
+</svg>

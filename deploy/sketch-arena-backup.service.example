@@ -1,0 +1,17 @@
+[Unit]
+Description=Create and verify a Sketch Arena data backup
+After=sketch-arena.service
+
+[Service]
+Type=oneshot
+User=sketcharena
+Group=sketcharena
+WorkingDirectory=/srv/sketch-arena
+EnvironmentFile=/etc/sketch-arena/server.env
+ExecStart=/usr/bin/node /srv/sketch-arena/scripts/backup-postgres.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/sketch-arena
+ReadWritePaths=/var/backups/sketch-arena

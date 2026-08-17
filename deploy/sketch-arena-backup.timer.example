@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily verified Sketch Arena backup
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=sketch-arena-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -3,8 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "scripts": { "dev": "vite", "build": "tsc -b && vite build", "preview": "vite preview" },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build --configLoader runner",
+    "test": "vitest run --configLoader runner",
+    "preview": "vite preview"
+  },
   "dependencies": {
+    "@simplewebauthn/browser": "^13.3.0",
     "@sketch-arena/protocol": "*",
     "@vitejs/plugin-react": "^5.0.4",
     "framer-motion": "^12.23.24",
@@ -13,5 +19,10 @@
     "socket.io-client": "^4.8.1",
     "vite": "^7.1.9"
   },
-  "devDependencies": { "@types/react": "^19.1.16", "@types/react-dom": "^19.1.9", "typescript": "^5.9.3" }
+  "devDependencies": {
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.9",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
 }

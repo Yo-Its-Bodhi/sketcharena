@@ -7,20 +7,26 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "pretest": "npm run build",
     "test": "vitest run"
   },
   "dependencies": {
+    "@simplewebauthn/server": "^13.3.2",
     "@sketch-arena/protocol": "*",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "helmet": "^8.1.0",
+    "pg": "^8.23.0",
     "socket.io": "^4.8.1",
+    "viem": "^2.55.16",
     "zod": "^4.1.11"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/node": "^24.7.2",
+    "@types/pg": "^8.15.5",
+    "socket.io-client": "^4.8.3",
     "tsx": "^4.20.6",
     "vitest": "^3.2.4"
   }
