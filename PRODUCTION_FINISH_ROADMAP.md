@@ -37,6 +37,7 @@ Updated: 2026-08-17
 - [x] Five-percent ERC-2981 royalty goes to the original minting artist; the existing marketplace independently charges its 2.5% platform fee.
 - [x] Collection allowlist/blocklist policy and signer rotation controls.
 - [x] Dedicated voucher signer stored only on the protected VPS.
+- [x] Public collection-level metadata endpoint for the contract and marketplace indexer.
 - [x] Contract compile and disposable-chain adversarial suite.
 - [ ] One irreversible gate remains: deploy the reviewed collection from the approved owner wallet, then configure its address and run one free-mint canary on Shido mainnet.
 

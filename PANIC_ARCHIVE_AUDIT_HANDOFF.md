@@ -88,11 +88,11 @@ Record approved values and approvers in the release ticket. Blank values prohibi
 | Production payout receiver | `0xAe0CEb4Bc23Dfdd552eaE2865481B191C3b28da1` |
 | Immutable WSHIDO payment token | `0x8cbaffd9b658997e7bf87e98febf6ea6917166f7` (live name/symbol/decimals verified as Wrapped Shido / WSHIDO / 18) |
 | Maximum supply | effectively unlimited permanent collection; seasons remain metadata divisions |
-| Maximum voucher price | **TBD immediately before deployment**; owner-adjustable emergency WSHIDO ceiling, monitored so it can move with the USD price rather than becoming a permanent economic limit |
-| Standard mint policy | USD `$0.99` converted to WSHIDO in each short-lived voucher; **feed/deviation policy approval required** |
-| Initial collection metadata URI | **TBD** |
+| Maximum voucher price | `type(uint256).max` at deployment: the cap is intentionally non-economic because a fixed WSHIDO amount cannot represent a stable USD ceiling. Exact user approval plus the signed short-lived price remains the spend boundary; the owner can install an emergency token cap later. |
+| Standard mint policy | USD `$0.99` converted to WSHIDO in each short-lived voucher; primary/fallback quotes must stay within 10% or paid minting fails closed |
+| Initial collection metadata URI | `https://sketch.bodhix.io/api/archive/metadata` (owner-updatable until deliberately frozen) |
 | Artist royalty | 500 bps (5%) per token, permanently payable to that token's original minting wallet—not the Sketch Arena owner or treasury |
-| Voucher maximum lifetime | currently 900 seconds; **approval required** |
+| Voucher maximum lifetime | 900 seconds; approved by product owner |
 | Minimum confirmation depth | 3 confirmations; approved by product owner |
 | Marketplace-approved collection process | **TBD / evidence required** |
 

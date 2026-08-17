@@ -240,6 +240,18 @@ app.get('/api/archive', async (request, response) => {
   const items = records.map(toPanicArchiveItem);
   return response.json({ collection: 'Sketch Arena: The Panic Archive', season: { id: 0, name: 'The First Mess' }, total: items.length, items });
 });
+app.get('/api/archive/metadata', (_request, response) => {
+  const origin = minting.config.publicOrigin;
+  response.setHeader('cache-control', 'public, max-age=3600, stale-while-revalidate=86400');
+  return response.json({
+    name: 'Sketch Arena: The Panic Archive',
+    symbol: 'PANIC',
+    description: 'Original player-made disasters from Sketch Arena. Drawn under pressure, signed by the artist and archived on Shido.',
+    image: `${origin}/brand/app-icon-512.png`,
+    banner_image: `${origin}/social/draw-badly-become-legendary.png`,
+    external_link: `${origin}/archive`,
+  });
+});
 app.get('/api/mint/status', async (_request, response) => response.json(await minting.verifyInfrastructure()));
 app.get('/api/wallet', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request); if (!ownerSessionId) return response.status(401).json({ error: 'Player authentication required' });
