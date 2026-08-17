@@ -85,6 +85,8 @@ const mintRepository = databasePool
   ? new MemoryMintRepository()
   : new FileMintRepository(persistence.mintFile);
 const minting = new MintService(artwork, progression, mintRepository, loadMintConfiguration());
+const initialMintStatus = await minting.verifyInfrastructure(true);
+if (minting.config.enabled && !initialMintStatus.enabled) log('warn', 'mint.infrastructure_not_ready', { checks: initialMintStatus.missing.join(',') });
 const promotionRepository = databasePool ? new PostgresPromotionRepository(databasePool) : persistence.promotionFile === ':memory:' ? new MemoryPromotionRepository() : new FilePromotionRepository(persistence.promotionFile);
 const promotions = new PromotionService(promotionRepository, progression);
 const reports = databasePool ? new PostgresReportRepository(databasePool) : persistence.reportFile === ':memory:' ? new MemoryReportRepository() : new FileReportRepository(persistence.reportFile);
@@ -119,7 +121,7 @@ const accountMigrationSchema = z.object({ name: nameSchema, deviceLabel: z.strin
 const passkeyRegistrationSchema = z.object({ challengeId: z.string().uuid(), label: z.string().trim().min(2).max(80).default('My passkey'), response: z.object({ id: z.string().min(1) }).passthrough() });
 const passkeyAuthenticationSchema = z.object({ challengeId: z.string().uuid(), deviceLabel: z.string().trim().min(2).max(80).default('Passkey device'), response: z.object({ id: z.string().min(1) }).passthrough() });
 const roomCreateSchema = z.object({
-  name: z.string().trim().min(2).max(36), category: z.enum(['chaos', 'classic', 'crypto']).default('chaos'),
+  name: z.string().trim().min(2).max(36), category: z.enum(['chaos', 'classic', 'crypto', 'animals', 'food', 'screen', 'music', 'places', 'legends']).default('chaos'),
   isPrivate: z.boolean().optional().default(false), maxPlayers: z.number().int().min(2).max(GAME.maxPlayers).optional().default(8),
   roundSeconds: z.union([z.literal(30), z.literal(45), z.literal(60)]).optional().default(45),
 });
@@ -238,7 +240,7 @@ app.get('/api/archive', async (request, response) => {
   const items = records.map(toPanicArchiveItem);
   return response.json({ collection: 'Sketch Arena: The Panic Archive', season: { id: 0, name: 'The First Mess' }, total: items.length, items });
 });
-app.get('/api/mint/status', (_request, response) => response.json(minting.status()));
+app.get('/api/mint/status', async (_request, response) => response.json(await minting.verifyInfrastructure()));
 app.get('/api/wallet', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request); if (!ownerSessionId) return response.status(401).json({ error: 'Player authentication required' });
   return response.json({ binding: await minting.binding(ownerSessionId) });

@@ -169,6 +169,8 @@ export interface MintPreparation {
   chainId: number;
   chainName: string;
   nativeCurrency: { name: string; symbol: string; decimals: number };
+  paymentToken: { address: `0x${string}`; name: string; symbol: string; decimals: number };
+  priceQuote?: { usdCents: number; tokenUsd: number; source: string; quotedAt: number };
   rpcUrls: string[];
   blockExplorerUrl?: string;
   marketplaceUrl?: string;
@@ -177,6 +179,7 @@ export interface MintPreparation {
   voucher: PanicArchiveVoucher;
   signature: `0x${string}`;
   transactionRequest: { to: `0x${string}`; from: `0x${string}`; value: `0x${string}`; data: `0x${string}` };
+  approvalRequest?: { to: `0x${string}`; from: `0x${string}`; value: `0x0`; data: `0x${string}` };
   usesMintCredit: boolean;
   discountBps?: number;
   expiresAt: number;

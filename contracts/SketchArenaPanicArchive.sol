@@ -9,13 +9,17 @@ import {Pausable} from "@openzeppelin/contracts/security/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /// @title Sketch Arena: The Panic Archive
 /// @notice One permanent ERC-721 collection for player-created Sketch Arena trophies.
 /// @dev The game backend authorizes narrowly scoped mints with EIP-712 vouchers. Promo codes,
 ///      achievements, Battle Pass rewards, discounts and Mint Credits are resolved off-chain
-///      before signing; the contract enforces the final recipient, price and provenance.
+///      before signing; the contract enforces the final recipient, WSHIDO amount and provenance.
+///      Each token's ERC-2981 royalty belongs permanently to its original minting wallet.
 contract SketchArenaPanicArchive is ERC721URIStorage, ERC2981, Ownable2Step, Pausable, ReentrancyGuard, EIP712 {
+    using SafeERC20 for IERC20;
     uint96 public constant MAX_ROYALTY_BPS = 1_000;
     bytes32 public constant MINT_VOUCHER_TYPEHASH = keccak256(
         "MintVoucher(address recipient,bytes32 tokenURIHash,bytes32 artworkHash,uint256 price,uint256 nonce,uint256 deadline,uint32 seasonId,bytes32 campaignId)"
@@ -36,6 +40,7 @@ contract SketchArenaPanicArchive is ERC721URIStorage, ERC2981, Ownable2Step, Pau
     error InvalidSigner();
     error InvalidRecipient();
     error InvalidPayoutReceiver();
+    error InvalidPaymentToken();
     error InvalidSupply();
     error EmptyTokenURI();
     error EmptyArtworkHash();
@@ -45,26 +50,22 @@ contract SketchArenaPanicArchive is ERC721URIStorage, ERC2981, Ownable2Step, Pau
     error InvalidVoucherSigner();
     error TokenURIHashMismatch();
     error ArtworkAlreadyMinted();
-    error IncorrectPayment();
     error PriceAboveSafetyCap();
     error MaxSupplyReached();
     error RecipientBlocked();
     error RecipientNotApproved();
     error RoyaltyTooHigh();
-    error InvalidRoyaltyReceiver();
-    error RoyaltyLocked();
     error CollectionMetadataFrozen();
     error EmptyCollectionURI();
-    error NoFunds();
-    error WithdrawFailed();
 
     uint256 public immutable maxSupply;
+    IERC20 public immutable paymentToken;
+    uint96 public immutable artistRoyaltyBps;
     uint256 public nextTokenId = 1;
     address public mintSigner;
     address public payoutReceiver;
     uint256 public maxMintPrice;
     bool public allowlistRequired;
-    bool public royaltyLocked;
     bool public collectionMetadataFrozen;
 
     mapping(uint256 => bool) public usedNonces;
@@ -93,10 +94,6 @@ contract SketchArenaPanicArchive is ERC721URIStorage, ERC2981, Ownable2Step, Pau
     event AllowlistRequirementUpdated(bool required);
     event CollectionMetadataUpdated(string contractURI);
     event CollectionMetadataLocked(string contractURI);
-    event RoyaltyUpdated(address indexed receiver, uint96 feeBps);
-    event RoyaltyRemoved();
-    event RoyaltyPermanentlyLocked(address indexed receiver, uint96 feeBps);
-    event FundsWithdrawn(address indexed receiver, uint256 amount);
     event MintingPaused(address indexed operator);
     event MintingResumed(address indexed operator);
 
@@ -104,27 +101,28 @@ contract SketchArenaPanicArchive is ERC721URIStorage, ERC2981, Ownable2Step, Pau
         address owner_,
         address mintSigner_,
         address payoutReceiver_,
+        address paymentToken_,
         uint256 maxSupply_,
         uint256 maxMintPrice_,
         string memory collectionMetadataURI_,
-        address royaltyReceiver_,
-        uint96 royaltyBps_
+        uint96 artistRoyaltyBps_
     ) ERC721("Sketch Arena: The Panic Archive", "PANIC") EIP712("Sketch Arena: The Panic Archive", "1") {
         if (owner_ == address(0)) revert InvalidOwner();
         if (mintSigner_ == address(0)) revert InvalidSigner();
         if (payoutReceiver_ == address(0)) revert InvalidPayoutReceiver();
+        if (paymentToken_ == address(0) || paymentToken_.code.length == 0) revert InvalidPaymentToken();
         if (maxSupply_ == 0) revert InvalidSupply();
         if (bytes(collectionMetadataURI_).length == 0) revert EmptyCollectionURI();
-        if (royaltyBps_ > MAX_ROYALTY_BPS) revert RoyaltyTooHigh();
-        if (royaltyBps_ > 0 && royaltyReceiver_ == address(0)) revert InvalidRoyaltyReceiver();
+        if (artistRoyaltyBps_ > MAX_ROYALTY_BPS) revert RoyaltyTooHigh();
 
         _transferOwnership(owner_);
         mintSigner = mintSigner_;
         payoutReceiver = payoutReceiver_;
+        paymentToken = IERC20(paymentToken_);
         maxSupply = maxSupply_;
         maxMintPrice = maxMintPrice_;
+        artistRoyaltyBps = artistRoyaltyBps_;
         _collectionMetadataURI = collectionMetadataURI_;
-        if (royaltyBps_ > 0) _setDefaultRoyalty(royaltyReceiver_, royaltyBps_);
     }
 
     function contractURI() external view returns (string memory) {
@@ -141,7 +139,6 @@ contract SketchArenaPanicArchive is ERC721URIStorage, ERC2981, Ownable2Step, Pau
 
     function redeem(MintVoucher calldata voucher, string calldata tokenURI_, bytes calldata signature)
         external
-        payable
         nonReentrant
         whenNotPaused
         returns (uint256 tokenId)
@@ -157,17 +154,18 @@ contract SketchArenaPanicArchive is ERC721URIStorage, ERC2981, Ownable2Step, Pau
         if (voucher.artworkHash == bytes32(0)) revert EmptyArtworkHash();
         if (tokenIdByArtworkHash[voucher.artworkHash] != 0) revert ArtworkAlreadyMinted();
         if (voucher.price > maxMintPrice) revert PriceAboveSafetyCap();
-        if (msg.value != voucher.price) revert IncorrectPayment();
         if (nextTokenId > maxSupply) revert MaxSupplyReached();
 
         address recovered = ECDSA.recover(_hashTypedDataV4(_voucherStructHash(voucher)), signature);
         if (recovered != mintSigner) revert InvalidVoucherSigner();
 
         usedNonces[voucher.nonce] = true;
+        if (voucher.price != 0) paymentToken.safeTransferFrom(voucher.recipient, payoutReceiver, voucher.price);
         tokenId = nextTokenId++;
         tokenIdByArtworkHash[voucher.artworkHash] = tokenId;
         _safeMint(voucher.recipient, tokenId);
         _setTokenURI(tokenId, tokenURI_);
+        if (artistRoyaltyBps != 0) _setTokenRoyalty(tokenId, voucher.recipient, artistRoyaltyBps);
 
         emit PanicArchiveMinted(
             voucher.recipient,
@@ -236,27 +234,6 @@ contract SketchArenaPanicArchive is ERC721URIStorage, ERC2981, Ownable2Step, Pau
         emit CollectionMetadataLocked(_collectionMetadataURI);
     }
 
-    function setRoyalty(address receiver, uint96 feeBps) external onlyOwner {
-        if (royaltyLocked) revert RoyaltyLocked();
-        if (receiver == address(0)) revert InvalidRoyaltyReceiver();
-        if (feeBps > MAX_ROYALTY_BPS) revert RoyaltyTooHigh();
-        _setDefaultRoyalty(receiver, feeBps);
-        emit RoyaltyUpdated(receiver, feeBps);
-    }
-
-    function removeRoyalty() external onlyOwner {
-        if (royaltyLocked) revert RoyaltyLocked();
-        _deleteDefaultRoyalty();
-        emit RoyaltyRemoved();
-    }
-
-    function lockRoyalty() external onlyOwner {
-        if (royaltyLocked) revert RoyaltyLocked();
-        royaltyLocked = true;
-        (address receiver, uint256 amount) = royaltyInfo(1, 10_000);
-        emit RoyaltyPermanentlyLocked(receiver, uint96(amount));
-    }
-
     function pause() external onlyOwner {
         _pause();
         emit MintingPaused(msg.sender);
@@ -265,15 +242,6 @@ contract SketchArenaPanicArchive is ERC721URIStorage, ERC2981, Ownable2Step, Pau
     function unpause() external onlyOwner {
         _unpause();
         emit MintingResumed(msg.sender);
-    }
-
-    function withdraw() external nonReentrant {
-        if (msg.sender != owner() && msg.sender != payoutReceiver) revert InvalidPayoutReceiver();
-        uint256 balance = address(this).balance;
-        if (balance == 0) revert NoFunds();
-        (bool sent,) = payable(payoutReceiver).call{value: balance}("");
-        if (!sent) revert WithdrawFailed();
-        emit FundsWithdrawn(payoutReceiver, balance);
     }
 
     function supportsInterface(bytes4 interfaceId)

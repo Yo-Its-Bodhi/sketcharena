@@ -1,8 +1,9 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import type { ArtworkDocument, MintPreparation, PanicArchiveVoucher, PlayerProgress } from '@sketch-arena/protocol';
 import {
   createPublicClient, decodeEventLog, encodeFunctionData, getAddress, http, isAddress, keccak256, parseAbi,
-  toBytes, toHex, verifyMessage, type Address, type Hex, type PublicClient, type Transaction, type TransactionReceipt,
+  parseUnits, toBytes, verifyMessage, type Address, type Hex, type PublicClient, type Transaction, type TransactionReceipt,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { ArtworkRepository } from '../artwork/ArtworkRepository.js';
@@ -11,18 +12,33 @@ import type { ProgressionRepository } from '../progression/ProgressionRepository
 import type { MintRecord, MintRepository } from './MintRepository.js';
 
 const PANIC_ARCHIVE_ABI = parseAbi([
-  'function redeem((address recipient,bytes32 tokenURIHash,bytes32 artworkHash,uint256 price,uint256 nonce,uint256 deadline,uint32 seasonId,bytes32 campaignId) voucher,string tokenURI_,bytes signature) payable returns (uint256 tokenId)',
+  'function redeem((address recipient,bytes32 tokenURIHash,bytes32 artworkHash,uint256 price,uint256 nonce,uint256 deadline,uint32 seasonId,bytes32 campaignId) voucher,string tokenURI_,bytes signature) returns (uint256 tokenId)',
   'function setRecipientBlocked(address recipient,bool blocked)',
   'function setRecipientApproved(address recipient,bool approved)',
   'function setAllowlistRequired(bool required)',
   'event PanicArchiveMinted(address indexed recipient,uint256 indexed tokenId,bytes32 indexed artworkHash,uint256 pricePaid,uint256 nonce,uint32 seasonId,bytes32 campaignId)',
 ]);
+const PANIC_ARCHIVE_READ_ABI = parseAbi([
+  'function mintSigner() view returns (address)',
+  'function maxMintPrice() view returns (uint256)',
+  'function paused() view returns (bool)',
+  'function name() view returns (string)',
+  'function symbol() view returns (string)',
+  'function paymentToken() view returns (address)',
+]);
+const ERC20_READ_ABI = parseAbi([
+  'function name() view returns (string)',
+  'function symbol() view returns (string)',
+  'function decimals() view returns (uint8)',
+]);
+const ERC20_WRITE_ABI = parseAbi(['function approve(address spender,uint256 amount) returns (bool)']);
 
 export interface ChainReader {
   getTransactionReceipt(args: { hash: Hex }): Promise<TransactionReceipt>;
   getTransaction(args: { hash: Hex }): Promise<Transaction>;
   getBlockNumber(): Promise<bigint>;
 }
+export type MintInfrastructureValidator = (config: MintConfiguration) => Promise<string[]>;
 
 export interface MintConfiguration {
   enabled: boolean;
@@ -39,7 +55,11 @@ export interface MintConfiguration {
   ipfsApiToken?: string;
   ipfsPublicGateway?: string;
   signerPrivateKey?: Hex;
-  standardPriceWei?: bigint;
+  paymentToken?: Address;
+  mintUsdCents: number;
+  priceApiUrl: string;
+  priceFallbackApiUrl: string;
+  maxPriceDeviationBps: number;
   voucherLifetimeMs: number;
   requiredConfirmations: number;
   publicOrigin: string;
@@ -55,9 +75,11 @@ export interface MintPublicStatus {
   chainName: string;
   nativeCurrency: MintConfiguration['nativeCurrency'];
   blockExplorerUrl?: string;
-  standardPriceWei?: string;
+  standardPriceUsd: string;
+  paymentToken?: { address: Address; name: string; symbol: string; decimals: number };
   firstMintFree: true;
 }
+interface TokenPriceQuote { tokenUsd: number; source: string; quotedAt: number; }
 export type ContractAccessAction = { action: 'set-blocked'; address: string; enabled: boolean } | { action: 'set-approved'; address: string; enabled: boolean } | { action: 'set-allowlist'; enabled: boolean };
 export interface ContractAdminTransaction { chainId: number; chainName: string; nativeCurrency: MintConfiguration['nativeCurrency']; rpcUrls: string[]; blockExplorerUrl?: string; request: { to: Address; value: '0x0'; data: Hex }; summary: string; }
 
@@ -65,8 +87,49 @@ export class MintServiceError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
 
+async function fetchTokenPrice(url: string, source: string, fetcher: typeof fetch): Promise<TokenPriceQuote> {
+  const response = await fetcher(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8_000) });
+  if (!response.ok) throw new Error(`${source} returned HTTP ${response.status}`);
+  const payload = await response.json() as { price_usd?: unknown; 'shido-2'?: { usd?: unknown } };
+  const tokenUsd = typeof payload.price_usd === 'number' ? payload.price_usd : payload['shido-2']?.usd;
+  if (typeof tokenUsd !== 'number' || !Number.isFinite(tokenUsd) || tokenUsd <= 0) throw new Error(`${source} returned an invalid SHIDO price`);
+  return { tokenUsd, source, quotedAt: Date.now() };
+}
+
+async function quoteWshido(config: MintConfiguration, fetcher: typeof fetch): Promise<TokenPriceQuote> {
+  const results = await Promise.allSettled([
+    fetchTokenPrice(config.priceApiUrl, 'BodhiX market feed', fetcher),
+    fetchTokenPrice(config.priceFallbackApiUrl, 'CoinGecko', fetcher),
+  ]);
+  const quotes = results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+  if (!quotes.length) throw new MintServiceError('The live SHIDO price is temporarily unavailable. No paid voucher was created.', 503);
+  if (quotes.length === 2) {
+    const low = Math.min(quotes[0]!.tokenUsd, quotes[1]!.tokenUsd); const high = Math.max(quotes[0]!.tokenUsd, quotes[1]!.tokenUsd);
+    const deviationBps = Math.round((high - low) * 10_000 / low);
+    if (deviationBps > config.maxPriceDeviationBps) throw new MintServiceError('The SHIDO price feeds disagree. Paid minting is safely paused.', 503);
+  }
+  return quotes[0]!;
+}
+
+function usdCentsToTokenUnits(usdCents: number, tokenUsd: number, decimals: number): bigint {
+  const priceScale = 12; const priceScaled = parseUnits(tokenUsd.toFixed(priceScale), priceScale);
+  if (priceScaled <= 0n) throw new MintServiceError('The SHIDO price quote is too small to use safely', 503);
+  const numerator = BigInt(usdCents) * (10n ** BigInt(decimals)) * (10n ** BigInt(priceScale));
+  const denominator = 100n * priceScaled;
+  return (numerator + denominator - 1n) / denominator;
+}
+
 function positiveInteger(value: string | undefined): number | undefined {
   const parsed = Number(value); return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function signerPrivateKey(environment: NodeJS.ProcessEnv): Hex | undefined {
+  let candidate = environment.PANIC_ARCHIVE_SIGNER_PRIVATE_KEY?.trim();
+  const file = environment.PANIC_ARCHIVE_SIGNER_PRIVATE_KEY_FILE?.trim();
+  if (!candidate && file) {
+    try { candidate = readFileSync(file, 'utf8').trim(); } catch { candidate = undefined; }
+  }
+  return /^0x[0-9a-f]{64}$/i.test(candidate ?? '') ? candidate as Hex : undefined;
 }
 
 export function loadMintConfiguration(environment: NodeJS.ProcessEnv = process.env): MintConfiguration {
@@ -75,27 +138,64 @@ export function loadMintConfiguration(environment: NodeJS.ProcessEnv = process.e
   const rpcUrl = environment.SHIDO_RPC_URL?.trim();
   const ipfsApiUrl = environment.IPFS_API_URL?.trim()?.replace(/\/+$/, '');
   const ipfsPublicGateway = environment.IPFS_PUBLIC_GATEWAY?.trim()?.replace(/\/+$/, '');
-  const signerPrivateKey = /^0x[0-9a-f]{64}$/i.test(environment.PANIC_ARCHIVE_SIGNER_PRIVATE_KEY ?? '') ? environment.PANIC_ARCHIVE_SIGNER_PRIVATE_KEY as Hex : undefined;
-  let standardPriceWei: bigint | undefined;
-  try { if (/^\d+$/.test(environment.PANIC_ARCHIVE_MINT_PRICE_WEI ?? '')) standardPriceWei = BigInt(environment.PANIC_ARCHIVE_MINT_PRICE_WEI!); } catch { standardPriceWei = undefined; }
+  const signerKey = signerPrivateKey(environment);
+  const paymentToken = environment.WSHIDO_ADDRESS && isAddress(environment.WSHIDO_ADDRESS) ? getAddress(environment.WSHIDO_ADDRESS) : undefined;
+  const configuredUsdCents = positiveInteger(environment.PANIC_ARCHIVE_MINT_USD_CENTS);
+  const mintUsdCents = configuredUsdCents ?? 99;
   const missing = [
     !contractAddress && 'PANIC_ARCHIVE_ADDRESS', !chainId && 'PANIC_ARCHIVE_CHAIN_ID', !rpcUrl && 'SHIDO_RPC_URL', !ipfsApiUrl && 'IPFS_API_URL',
-    !ipfsPublicGateway && 'IPFS_PUBLIC_GATEWAY', !signerPrivateKey && 'PANIC_ARCHIVE_SIGNER_PRIVATE_KEY', standardPriceWei === undefined && 'PANIC_ARCHIVE_MINT_PRICE_WEI',
+    !ipfsPublicGateway && 'IPFS_PUBLIC_GATEWAY', !signerKey && 'PANIC_ARCHIVE_SIGNER_PRIVATE_KEY_OR_FILE', !paymentToken && 'WSHIDO_ADDRESS',
   ].filter((value): value is string => Boolean(value));
   const configuredWalletRpcs = (environment.SHIDO_WALLET_RPC_URLS ?? rpcUrl ?? '').split(',').map((value) => value.trim()).filter(Boolean);
   const marketplaceTemplate = environment.PANIC_ARCHIVE_MARKETPLACE_TOKEN_URL_TEMPLATE?.trim();
   const marketplaceTokenUrlTemplate = marketplaceTemplate?.startsWith('https://') && marketplaceTemplate.includes('{contract}') && marketplaceTemplate.includes('{tokenId}') ? marketplaceTemplate : undefined;
   return {
-    enabled: missing.length === 0, missing, contractAddress, chainId, rpcUrl, ipfsApiUrl, ipfsPublicGateway, signerPrivateKey, standardPriceWei,
+    enabled: missing.length === 0, missing, contractAddress, chainId, rpcUrl, ipfsApiUrl, ipfsPublicGateway, signerPrivateKey: signerKey, paymentToken, mintUsdCents,
+    priceApiUrl: environment.SHIDO_PRICE_API_URL?.trim() || 'https://nftstudio.bodhix.io/api/market/native',
+    priceFallbackApiUrl: environment.SHIDO_PRICE_FALLBACK_API_URL?.trim() || 'https://api.coingecko.com/api/v3/simple/price?ids=shido-2&vs_currencies=usd',
+    maxPriceDeviationBps: Math.min(5_000, positiveInteger(environment.SHIDO_PRICE_MAX_DEVIATION_BPS) ?? 1_000),
     chainName: environment.SHIDO_CHAIN_NAME?.trim() || 'Shido', nativeCurrency: { name: 'SHIDO', symbol: 'SHIDO', decimals: 18 },
     walletRpcUrls: configuredWalletRpcs, explorerUrl: environment.SHIDO_EXPLORER_URL?.trim()?.replace(/\/+$/, '') || 'https://shidoscan.net',
     marketplaceTokenUrlTemplate, ipfsApiToken: environment.IPFS_API_TOKEN?.trim(),
     voucherLifetimeMs: Math.min(3_600_000, Math.max(120_000, (positiveInteger(environment.PANIC_ARCHIVE_VOUCHER_SECONDS) ?? 900) * 1_000)),
-    requiredConfirmations: Math.min(12, positiveInteger(environment.PANIC_ARCHIVE_CONFIRMATIONS) ?? 1), publicOrigin: environment.PUBLIC_APP_ORIGIN?.trim()?.replace(/\/+$/, '') || 'https://sketcharena.bodhix.io',
+    requiredConfirmations: Math.min(12, positiveInteger(environment.PANIC_ARCHIVE_CONFIRMATIONS) ?? 3), publicOrigin: environment.PUBLIC_APP_ORIGIN?.trim()?.replace(/\/+$/, '') || 'https://sketcharena.bodhix.io',
   };
 }
 
-function assertConfigured(config: MintConfiguration): asserts config is MintConfiguration & Required<Pick<MintConfiguration, 'contractAddress' | 'chainId' | 'rpcUrl' | 'ipfsApiUrl' | 'ipfsPublicGateway' | 'signerPrivateKey' | 'standardPriceWei'>> {
+export async function validateMintInfrastructure(config: MintConfiguration, fetcher: typeof fetch = fetch): Promise<string[]> {
+  assertConfigured(config);
+  const errors: string[] = [];
+  try {
+    const client = createPublicClient({ transport: http(config.rpcUrl) });
+    const [chainId, bytecode, signer, maxPrice, paused, name, symbol, contractPaymentToken, tokenName, tokenSymbol, tokenDecimals] = await Promise.all([
+      client.getChainId(), client.getBytecode({ address: config.contractAddress }),
+      client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'mintSigner' }),
+      client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'maxMintPrice' }),
+      client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'paused' }),
+      client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'name' }),
+      client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'symbol' }),
+      client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'paymentToken' }),
+      client.readContract({ address: config.paymentToken, abi: ERC20_READ_ABI, functionName: 'name' }),
+      client.readContract({ address: config.paymentToken, abi: ERC20_READ_ABI, functionName: 'symbol' }),
+      client.readContract({ address: config.paymentToken, abi: ERC20_READ_ABI, functionName: 'decimals' }),
+    ]);
+    if (chainId !== config.chainId) errors.push('PANIC_ARCHIVE_RPC_CHAIN_ID_MISMATCH');
+    if (!bytecode || bytecode === '0x') errors.push('PANIC_ARCHIVE_CONTRACT_CODE_MISSING');
+    if (name !== 'Sketch Arena: The Panic Archive' || symbol !== 'PANIC') errors.push('PANIC_ARCHIVE_CONTRACT_IDENTITY_MISMATCH');
+    if (signer.toLowerCase() !== privateKeyToAccount(config.signerPrivateKey).address.toLowerCase()) errors.push('PANIC_ARCHIVE_SIGNER_MISMATCH');
+    if (contractPaymentToken.toLowerCase() !== config.paymentToken.toLowerCase()) errors.push('PANIC_ARCHIVE_PAYMENT_TOKEN_MISMATCH');
+    if (tokenName !== 'Wrapped Shido' || tokenSymbol !== 'WSHIDO' || tokenDecimals !== 18) errors.push('WSHIDO_TOKEN_IDENTITY_MISMATCH');
+    try { const quote = await quoteWshido(config, fetcher); if (usdCentsToTokenUnits(config.mintUsdCents, quote.tokenUsd, 18) > maxPrice) errors.push('PANIC_ARCHIVE_PRICE_ABOVE_CONTRACT_CAP'); } catch { /* free mints remain available; paid preparation fails closed */ }
+    if (paused) errors.push('PANIC_ARCHIVE_MINTING_PAUSED');
+  } catch { errors.push('PANIC_ARCHIVE_RPC_OR_CONTRACT_UNAVAILABLE'); }
+  try {
+    const response = await fetcher(`${config.ipfsApiUrl}/api/v0/version`, { method: 'POST', headers: config.ipfsApiToken ? { authorization: `Bearer ${config.ipfsApiToken}` } : undefined, signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) errors.push('IPFS_API_UNAVAILABLE');
+  } catch { errors.push('IPFS_API_UNAVAILABLE'); }
+  return [...new Set(errors)];
+}
+
+function assertConfigured(config: MintConfiguration): asserts config is MintConfiguration & Required<Pick<MintConfiguration, 'contractAddress' | 'chainId' | 'rpcUrl' | 'ipfsApiUrl' | 'ipfsPublicGateway' | 'signerPrivateKey' | 'paymentToken'>> {
   if (!config.enabled) throw new MintServiceError('Panic Archive minting is not configured yet', 503);
 }
 function assertContractControls(config: MintConfiguration): asserts config is MintConfiguration & Required<Pick<MintConfiguration, 'contractAddress' | 'chainId'>> {
@@ -131,17 +231,41 @@ function safeFileName(value: string): string { return value.toLowerCase().replac
 export class MintService {
   private operationQueue: Promise<unknown> = Promise.resolve();
   private readonly chain: ChainReader | null;
+  private readinessErrors: string[];
+  private readinessCheckedAt = 0;
+  private readinessCheck: Promise<void> | null = null;
   constructor(
     private readonly artwork: ArtworkRepository, private readonly progression: ProgressionRepository, private readonly repository: MintRepository,
     readonly config: MintConfiguration = loadMintConfiguration(), private readonly clock: () => number = Date.now,
     private readonly fetcher: typeof fetch = fetch, chain?: ChainReader,
+    private readonly infrastructureValidator: MintInfrastructureValidator = (value) => validateMintInfrastructure(value, fetcher),
   ) {
     this.chain = chain ?? (config.enabled && config.rpcUrl ? createPublicClient({ transport: http(config.rpcUrl) }) as PublicClient as ChainReader : null);
+    this.readinessErrors = config.enabled ? ['PANIC_ARCHIVE_VERIFICATION_PENDING'] : [];
   }
 
   status(): MintPublicStatus {
-    return { enabled: this.config.enabled, contractControlsEnabled: Boolean(this.config.contractAddress && this.config.chainId && this.config.walletRpcUrls.length), missing: this.config.missing, collection: 'Sketch Arena: The Panic Archive', season: 'Season 0 · The First Mess', chainId: this.config.chainId,
-      chainName: this.config.chainName, nativeCurrency: this.config.nativeCurrency, blockExplorerUrl: this.config.explorerUrl, standardPriceWei: this.config.standardPriceWei?.toString(), firstMintFree: true };
+    const missing = [...this.config.missing, ...this.readinessErrors];
+    return { enabled: this.config.enabled && missing.length === 0, contractControlsEnabled: Boolean(this.config.contractAddress && this.config.chainId && this.config.walletRpcUrls.length), missing, collection: 'Sketch Arena: The Panic Archive', season: 'Season 0 · The First Mess', chainId: this.config.chainId,
+      chainName: this.config.chainName, nativeCurrency: this.config.nativeCurrency, blockExplorerUrl: this.config.explorerUrl, standardPriceUsd: (this.config.mintUsdCents / 100).toFixed(2),
+      paymentToken: this.config.paymentToken ? { address: this.config.paymentToken, name: 'Wrapped Shido', symbol: 'WSHIDO', decimals: 18 } : undefined, firstMintFree: true };
+  }
+
+  async verifyInfrastructure(force = false): Promise<MintPublicStatus> {
+    if (!this.config.enabled) return this.status();
+    if (!force && this.readinessCheckedAt && this.clock() - this.readinessCheckedAt < 30_000) return this.status();
+    if (!this.readinessCheck) this.readinessCheck = this.infrastructureValidator(this.config)
+      .then((errors) => { this.readinessErrors = errors; this.readinessCheckedAt = this.clock(); })
+      .catch(() => { this.readinessErrors = ['PANIC_ARCHIVE_INFRASTRUCTURE_CHECK_FAILED']; this.readinessCheckedAt = this.clock(); })
+      .finally(() => { this.readinessCheck = null; });
+    await this.readinessCheck;
+    return this.status();
+  }
+
+  private async requireOperational(): Promise<void> {
+    assertConfigured(this.config);
+    const status = await this.verifyInfrastructure();
+    if (!status.enabled) throw new MintServiceError('Panic Archive infrastructure has not passed its readiness checks', 503);
   }
 
   async createChallenge(sessionId: string, rawAddress: string): Promise<{ challengeId: string; address: Address; message: string; expiresAt: number }> {
@@ -179,7 +303,7 @@ export class MintService {
   }
 
   private async prepareSerial(sessionId: string, artworkId: string): Promise<MintPreparation> {
-    assertConfigured(this.config); const now = this.clock(); const binding = await this.repository.getBinding(sessionId);
+    await this.requireOperational(); assertConfigured(this.config); const now = this.clock(); const binding = await this.repository.getBinding(sessionId);
     if (!binding) throw new MintServiceError('Connect and verify your wallet first', 409);
     const art = await this.artwork.get(artworkId);
     if (!art || art.ownerSessionId !== sessionId) throw new MintServiceError('Artwork not found in your Vault', 404);
@@ -191,10 +315,13 @@ export class MintService {
     const player = await this.progression.getPlayer(sessionId); if (!player) throw new MintServiceError('Player profile not found', 404);
     const credit = availableCredit(player, await this.repository.listCreditReservations(now), now);
     const discount = credit ? null : availableDiscount(player, await this.repository.listDiscountReservations(now), now);
+    const liveQuote = credit ? undefined : await quoteWshido(this.config, this.fetcher);
+    const standardPrice = liveQuote ? usdCentsToTokenUnits(this.config.mintUsdCents, liveQuote.tokenUsd, 18) : 0n;
+    const price = credit ? 0n : discount ? standardPrice * BigInt(10_000 - discount.discountBps) / 10_000n : standardPrice;
     const svg = renderArtworkSvg(art); const artworkHash = keccak256(toBytes(svg));
     const mediaCid = await this.pin(svg, `${safeFileName(art.title)}.svg`, 'image/svg+xml'); const mediaURI = `ipfs://${mediaCid}`;
     const metadata = this.metadata(art, player, mediaURI, artworkHash); const metadataCid = await this.pin(JSON.stringify(metadata, null, 2), `${safeFileName(art.title)}-metadata.json`, 'application/json');
-    const tokenURI = `ipfs://${metadataCid}`; const tokenURIHash = keccak256(toBytes(tokenURI)); const price = credit ? 0n : discount ? this.config.standardPriceWei * BigInt(10_000 - discount.discountBps) / 10_000n : this.config.standardPriceWei;
+    const tokenURI = `ipfs://${metadataCid}`; const tokenURIHash = keccak256(toBytes(tokenURI));
     const nonce = BigInt(`0x${randomBytes(32).toString('hex')}`); const deadline = BigInt(Math.floor((now + this.config.voucherLifetimeMs) / 1_000));
     const campaignId = keccak256(toBytes(credit ? `mint-credit:${credit.rewardId}:${credit.unit}` : discount ? `mint-discount:${discount.rewardId}:${discount.unit}:${discount.discountBps}` : 'standard-mint-price'));
     const voucher: PanicArchiveVoucher = { recipient: binding.address, tokenURIHash, artworkHash, price: price.toString(), nonce: nonce.toString(), deadline: deadline.toString(), seasonId: 0, campaignId };
@@ -205,9 +332,13 @@ export class MintService {
         { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint256' }, { name: 'seasonId', type: 'uint32' }, { name: 'campaignId', type: 'bytes32' },
       ] }, primaryType: 'MintVoucher', message: { ...voucher, price, nonce, deadline } });
     const data = encodeFunctionData({ abi: PANIC_ARCHIVE_ABI, functionName: 'redeem', args: [{ ...voucher, price, nonce, deadline }, tokenURI, signature] });
+    const approvalData = price === 0n ? undefined : encodeFunctionData({ abi: ERC20_WRITE_ABI, functionName: 'approve', args: [this.config.contractAddress, price] });
     const record: MintRecord = { id: existing?.id ?? randomUUID(), artworkId, ownerSessionId: sessionId, status: 'prepared', walletAddress: binding.address, contractAddress: this.config.contractAddress,
       chainId: this.config.chainId, chainName: this.config.chainName, nativeCurrency: this.config.nativeCurrency, rpcUrls: this.config.walletRpcUrls, blockExplorerUrl: this.config.explorerUrl,
-      mediaURI, tokenURI, voucher, signature, transactionRequest: { to: this.config.contractAddress, from: binding.address, value: toHex(price), data },
+      paymentToken: { address: this.config.paymentToken, name: 'Wrapped Shido', symbol: 'WSHIDO', decimals: 18 },
+      priceQuote: liveQuote ? { usdCents: this.config.mintUsdCents, tokenUsd: liveQuote.tokenUsd, source: liveQuote.source, quotedAt: liveQuote.quotedAt } : undefined,
+      mediaURI, tokenURI, voucher, signature, transactionRequest: { to: this.config.contractAddress, from: binding.address, value: '0x0', data },
+      approvalRequest: approvalData ? { to: this.config.paymentToken, from: binding.address, value: '0x0', data: approvalData } : undefined,
       usesMintCredit: Boolean(credit), discountBps: discount?.discountBps, creditRewardId: credit?.rewardId, creditUnit: credit?.unit, discountRewardId: discount?.rewardId, discountUnit: discount?.unit,
       expiresAt: Number(deadline) * 1_000, createdAt: existing?.createdAt ?? now, updatedAt: now };
     await this.repository.saveMint(record); await this.artwork.updateMint(art.id, sessionId, { network: 'shido', status: 'prepared', walletAddress: binding.address, contractAddress: this.config.contractAddress, tokenURI }, 'mint-ready');
@@ -225,7 +356,8 @@ export class MintService {
     try { [receipt, transaction] = await Promise.all([this.chain.getTransactionReceipt({ hash: transactionHash as Hex }), this.chain.getTransaction({ hash: transactionHash as Hex })]); }
     catch { return { mint: publicMint(submitted), pending: true }; }
     if (receipt.status !== 'success') return { mint: publicMint(await this.fail(submitted, 'The mint transaction reverted on-chain')), pending: false };
-    if (transaction.to?.toLowerCase() !== this.config.contractAddress.toLowerCase() || transaction.from.toLowerCase() !== submitted.walletAddress.toLowerCase()) throw new MintServiceError('Transaction does not match this mint request', 409);
+    if (transaction.to?.toLowerCase() !== this.config.contractAddress.toLowerCase() || transaction.from.toLowerCase() !== submitted.walletAddress.toLowerCase()
+      || transaction.value !== 0n || transaction.input.toLowerCase() !== submitted.transactionRequest.data.toLowerCase()) throw new MintServiceError('Transaction does not match this mint request', 409);
     const latestBlock = await this.chain.getBlockNumber();
     if (latestBlock - receipt.blockNumber + 1n < BigInt(this.config.requiredConfirmations)) return { mint: publicMint(submitted), pending: true };
     const mintEvent = receipt.logs.filter((log) => log.address.toLowerCase() === this.config.contractAddress!.toLowerCase()).flatMap((log) => {

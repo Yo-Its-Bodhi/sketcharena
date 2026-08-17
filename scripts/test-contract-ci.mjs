@@ -3,9 +3,13 @@ import { resolve } from 'node:path';
 import process from 'node:process';
 
 const hardhatCli = resolve(process.cwd(), 'node_modules', 'hardhat', 'dist', 'src', 'cli.js');
+const hardhatEnv = { ...process.env, HARDHAT_DISABLE_TELEMETRY_PROMPT: 'true' };
+if (process.platform === 'win32' && !hardhatEnv.NODE_OPTIONS?.includes('process.geteuid')) {
+  hardhatEnv.NODE_OPTIONS = `${hardhatEnv.NODE_OPTIONS ?? ''} --import=data:text/javascript,process.geteuid=()=>1000`.trim();
+}
 const node = spawn(process.execPath, [hardhatCli, 'node', '--config', 'hardhat.panic.cjs', '--hostname', '127.0.0.1', '--port', '8546'], {
   cwd: process.cwd(),
-  env: { ...process.env, HARDHAT_DISABLE_TELEMETRY_PROMPT: 'true' },
+  env: hardhatEnv,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 

@@ -21,7 +21,7 @@ describe('ProgressionRepository', () => {
     const first = await repository.ensurePlayer('33333333-3333-4333-8333-333333333333', 'Chaos');
     const resumed = await repository.ensurePlayer(first.sessionId, 'Chaos Renamed');
     expect(resumed.rewards.filter((reward) => reward.campaignId === 'first-panic-archive-mint')).toHaveLength(1);
-    expect(resumed.rewards[0]).toMatchObject({ kind: 'mint-credit', amount: 1, reason: 'Your first Panic Archive mint is on us.' });
+    expect(resumed.rewards[0]).toMatchObject({ kind: 'mint-credit', amount: 1, reason: 'Your first Panic Archive mint is on us.', acknowledgedAt: 4321 });
   });
 
   it('updates earned progression without duplicating achievement items', async () => {

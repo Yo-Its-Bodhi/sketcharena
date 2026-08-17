@@ -116,7 +116,11 @@ export function ensurePlayerInState(state: ProgressionState, sessionId: string, 
 }
 
 function ensureFirstMintCredit(player: PlayerProgress, now: number): void {
-  if (player.rewards.some((reward) => reward.campaignId === 'first-panic-archive-mint')) return;
+  const existing = player.rewards.find((reward) => reward.campaignId === 'first-panic-archive-mint');
+  // This is an always-on welcome entitlement, not a random drop. Mark legacy
+  // and new grants as seen so players can use the credit immediately without
+  // receiving a misleading "loot unlocked" notification on first sign-in.
+  if (existing) { existing.acknowledgedAt ??= now; return; }
   player.rewards.push({
     id: randomUUID(),
     kind: 'mint-credit',
@@ -124,6 +128,7 @@ function ensureFirstMintCredit(player: PlayerProgress, now: number): void {
     reason: 'Your first Panic Archive mint is on us.',
     campaignId: 'first-panic-archive-mint',
     grantedAt: now,
+    acknowledgedAt: now,
   });
 }
 

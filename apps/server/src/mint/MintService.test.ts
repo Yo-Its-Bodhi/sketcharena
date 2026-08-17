@@ -9,6 +9,7 @@ import { MintService, type ChainReader, type MintConfiguration } from './MintSer
 const userKey = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
 const signerKey = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as Hex;
 const contract = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
+const paymentToken = '0x8cbaffd9b658997e7bf87e98febf6ea6917166f7' as const;
 
 describe('MintService', () => {
   it('verifies real wallet ownership and prepares a valid free EIP-712 voucher', async () => {
@@ -16,13 +17,16 @@ describe('MintService', () => {
     const player = await progression.ensurePlayer('11111111-1111-4111-8111-111111111111', 'Dru');
     const art = await artwork.save({ ownerSessionId: player.sessionId, origin: 'studio', status: 'mint-ready', title: 'Angry spaghetti', canvasRatio: 'square', width: 1200, height: 1200,
       strokes: [{ id: 'mark', tool: 'pencil', color: '#171514', size: 4, points: [{ x: .1, y: .1 }, { x: .9, y: .9 }], at: 1 }] });
-    let pin = 0; const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify({ Hash: `bafy-test-${++pin}` }), { status: 200 }));
+    let pin = 0; const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => String(input).startsWith('http://price')
+      ? new Response(JSON.stringify({ price_usd: 1 }), { status: 200 })
+      : new Response(JSON.stringify({ Hash: `bafy-test-${++pin}` }), { status: 200 }));
     const config: MintConfiguration = { enabled: true, missing: [], contractAddress: contract, chainId: 31337, chainName: 'Local EVM', nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
       rpcUrl: 'http://127.0.0.1:8545', walletRpcUrls: ['http://127.0.0.1:8545'], ipfsApiUrl: 'http://127.0.0.1:5001', ipfsPublicGateway: 'http://127.0.0.1:8080/ipfs', signerPrivateKey: signerKey,
-      standardPriceWei: 99n, voucherLifetimeMs: 900_000, requiredConfirmations: 1, publicOrigin: 'http://localhost:5173' };
+      paymentToken, mintUsdCents: 99, priceApiUrl: 'http://price-primary', priceFallbackApiUrl: 'http://price-fallback', maxPriceDeviationBps: 1_000,
+      voucherLifetimeMs: 900_000, requiredConfirmations: 1, publicOrigin: 'http://localhost:5173' };
     let receipt: TransactionReceipt | null = null; let transaction: Transaction | null = null;
     const chain = { getTransactionReceipt: async () => receipt!, getTransaction: async () => transaction!, getBlockNumber: async () => 10n } satisfies ChainReader;
-    const service = new MintService(artwork, progression, mints, config, () => 1_000, fetcher, chain);
+    const service = new MintService(artwork, progression, mints, config, () => 1_000, fetcher, chain, async () => []);
     const access = service.prepareContractAccessTransaction({ action: 'set-blocked', address: privateKeyToAccount(userKey).address, enabled: true });
     expect(access.summary).toMatch(/^Block /); expect(decodeFunctionData({ abi: parseAbi(['function setRecipientBlocked(address recipient,bool blocked)']), data: access.request.data })).toMatchObject({ functionName: 'setRecipientBlocked', args: [privateKeyToAccount(userKey).address, true] });
     const approval = service.prepareContractAccessTransaction({ action: 'set-approved', address: privateKeyToAccount(userKey).address, enabled: true });
@@ -47,7 +51,7 @@ describe('MintService', () => {
     const topics = encodeEventTopics({ abi: [event], eventName: 'PanicArchiveMinted', args: { recipient: user.address, tokenId: 7n, artworkHash: prepared.voucher.artworkHash } });
     const data = encodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }, { type: 'uint32' }, { type: 'bytes32' }], [0n, BigInt(prepared.voucher.nonce), 0, prepared.voucher.campaignId]);
     receipt = { status: 'success', blockNumber: 10n, logs: [{ address: contract, data, topics }] } as unknown as TransactionReceipt;
-    transaction = { to: contract, from: user.address } as unknown as Transaction;
+    transaction = { to: contract, from: user.address, value: 0n, input: prepared.transactionRequest.data } as unknown as Transaction;
     const result = await service.confirm(player.sessionId, prepared.id, `0x${'9'.repeat(64)}`);
     expect(result).toMatchObject({ pending: false, mint: { status: 'confirmed', tokenId: '7' } });
     const firstCredit = (await progression.getPlayer(player.sessionId))!.rewards.find((reward) => reward.campaignId === 'first-panic-archive-mint');
@@ -58,6 +62,25 @@ describe('MintService', () => {
     const secondArt = await artwork.save({ ownerSessionId: player.sessionId, origin: 'studio', status: 'mint-ready', title: 'Discount disaster', canvasRatio: 'square', width: 1200, height: 1200,
       strokes: [{ id: 'mark-two', tool: 'pencil', color: '#ef4444', size: 6, points: [{ x: .2, y: .8 }, { x: .8, y: .2 }], at: 2 }] });
     const discounted = await service.prepare(player.sessionId, secondArt.id);
-    expect(discounted).toMatchObject({ usesMintCredit: false, discountBps: 2_500 }); expect(discounted.voucher.price).toBe('74');
+    expect(discounted).toMatchObject({ usesMintCredit: false, discountBps: 2_500, paymentToken: { symbol: 'WSHIDO' }, priceQuote: { usdCents: 99, tokenUsd: 1, source: 'BodhiX market feed' } });
+    expect(discounted.voucher.price).toBe('742500000000000000'); expect(discounted.transactionRequest.value).toBe('0x0');
+    expect(decodeFunctionData({ abi: parseAbi(['function approve(address spender,uint256 amount) returns (bool)']), data: discounted.approvalRequest!.data })).toMatchObject({ functionName: 'approve', args: [contract, 742500000000000000n] });
+    fetcher.mockImplementation(async (input) => new Response(JSON.stringify({ price_usd: String(input).includes('fallback') ? 2 : 1 }), { status: 200 }));
+    const thirdArt = await artwork.save({ ownerSessionId: player.sessionId, origin: 'studio', status: 'mint-ready', title: 'Price feed panic', canvasRatio: 'square', width: 1200, height: 1200,
+      strokes: [{ id: 'mark-three', tool: 'pencil', color: '#171514', size: 2, points: [{ x: .1, y: .5 }, { x: .9, y: .5 }], at: 3 }] });
+    await expect(service.prepare(player.sessionId, thirdArt.id)).rejects.toThrow('price feeds disagree');
+  });
+
+  it('fails closed until the live contract, signer, price cap and IPFS checks pass', async () => {
+    const config: MintConfiguration = { enabled: true, missing: [], contractAddress: contract, chainId: 31337, chainName: 'Local EVM', nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      rpcUrl: 'http://127.0.0.1:8545', walletRpcUrls: ['http://127.0.0.1:8545'], ipfsApiUrl: 'http://127.0.0.1:5001', ipfsPublicGateway: 'http://127.0.0.1:8080/ipfs', signerPrivateKey: signerKey,
+      paymentToken, mintUsdCents: 99, priceApiUrl: 'http://price-primary', priceFallbackApiUrl: 'http://price-fallback', maxPriceDeviationBps: 1_000,
+      voucherLifetimeMs: 900_000, requiredConfirmations: 1, publicOrigin: 'http://localhost:5173' };
+    let failures = ['PANIC_ARCHIVE_SIGNER_MISMATCH'];
+    const service = new MintService(new MemoryArtworkRepository(), new MemoryProgressionRepository(), new MemoryMintRepository(), config, Date.now, fetch, undefined, async () => failures);
+    expect(service.status()).toMatchObject({ enabled: false, missing: ['PANIC_ARCHIVE_VERIFICATION_PENDING'] });
+    expect(await service.verifyInfrastructure(true)).toMatchObject({ enabled: false, missing: ['PANIC_ARCHIVE_SIGNER_MISMATCH'] });
+    failures = [];
+    expect(await service.verifyInfrastructure(true)).toMatchObject({ enabled: true, missing: [] });
   });
 });
