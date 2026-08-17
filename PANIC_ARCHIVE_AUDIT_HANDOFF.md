@@ -12,7 +12,7 @@ This document fixes the intended review boundary for `SketchArenaPanicArchive.so
 | Current source SHA-256 | `e5ab07960b07fc53cb09ffec57cd4661dc1c42b511441d821d9f64a846740fe1` |
 | Adversarial harness | `scripts/test-panic-archive.mjs` |
 | Current harness SHA-256 | `4e627098561e4696f29d9f752687a7f74313a6b6ff2c7083cc9969558434c465` |
-| Deployment artifact SHA-256 | `a0c4b90cdfd4e58307a664f1de5ccefb079cc46694163f942589dabf20471abd` |
+| Deployment artifact SHA-256 | `71ee58435749945f6a0dcd5762bd1279a55025feb20c4c3730bf35c33dd39d9b` |
 | Compiler | Solidity `0.8.26` |
 | EVM target | `paris` (Shido-compatible; excludes Shanghai `PUSH0`) |
 | Optimizer | enabled, 200 runs |
@@ -121,3 +121,5 @@ The exact Paris-targeted creation transaction was successfully estimated against
 6. Open public minting only after the canary evidence is accepted by the product owner.
 
 Backstage can prepare the exact checked-in artifact and constructor arguments for the approved owner wallet. It cannot sign, cannot accept a private key, refuses a second deployment after an address is configured, and verifies a successful receipt has contract code before displaying an address. The constructor starts paused; a separate owner transaction is required to unpause after independent verification.
+
+After deployment, `npm run contract:verify:mainnet -- 0xCollectionAddress` compares the normalized on-chain runtime against the reviewed artifact (accounting only for compiler-recorded immutable slots) and independently verifies every role, immutable, policy, metadata, identity and paused/no-mints-yet invariant before the application address may be configured.

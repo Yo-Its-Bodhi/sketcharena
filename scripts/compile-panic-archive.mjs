@@ -18,7 +18,7 @@ const input = {
   settings: {
     evmVersion: 'paris',
     optimizer: { enabled: true, runs: 200 },
-    outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object'] } },
+    outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object', 'evm.deployedBytecode.immutableReferences'] } },
   },
 };
 
@@ -51,6 +51,7 @@ else {
       abi: contract.abi,
       bytecode: `0x${contract.evm.bytecode.object}`,
       deployedBytecode: `0x${contract.evm.deployedBytecode.object}`,
+      immutableReferences: contract.evm.deployedBytecode.immutableReferences,
     }, null, 2)}\n`);
     console.log(`Wrote reviewed deployment artifact: ${artifactPath}`);
   }

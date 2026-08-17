@@ -16,8 +16,9 @@ const client = createPublicClient({ transport: http(rpcUrl, { timeout: 12_000 })
 const data = encodeDeployData({ abi: artifact.abi, bytecode: artifact.bytecode, args: [expected.owner, expected.mintSigner, expected.payoutReceiver, expected.paymentToken, maxUint256, maxUint256, 'https://sketch.bodhix.io/api/archive/metadata', 500] });
 const tokenAbi = parseAbi(['function name() view returns (string)', 'function symbol() view returns (string)', 'function decimals() view returns (uint8)']);
 
-const [chainId, paymentBytecode, ownerBalance, gasPrice, tokenName, tokenSymbol, tokenDecimals] = await Promise.all([
+const [chainId, paymentBytecode, ownerBalance, ownerNonce, gasPrice, tokenName, tokenSymbol, tokenDecimals] = await Promise.all([
   client.getChainId(), client.getBytecode({ address: expected.paymentToken }), client.getBalance({ address: expected.owner }),
+  client.getTransactionCount({ address: expected.owner }),
   client.getGasPrice(),
   client.readContract({ address: expected.paymentToken, abi: tokenAbi, functionName: 'name' }),
   client.readContract({ address: expected.paymentToken, abi: tokenAbi, functionName: 'symbol' }),
@@ -38,7 +39,7 @@ const checks = {
   ownerHasDeploymentGas: estimatedGas !== undefined && ownerBalance > BigInt(estimatedGas) * gasPrice,
 };
 console.log(JSON.stringify({
-  ready: Object.values(checks).every(Boolean), checks, chainId, owner: expected.owner, ownerBalanceWei: ownerBalance.toString(),
+  ready: Object.values(checks).every(Boolean), checks, chainId, owner: expected.owner, ownerNonce, ownerBalanceWei: ownerBalance.toString(),
   paymentToken: { address: expected.paymentToken, name: tokenName, symbol: tokenSymbol, decimals: Number(tokenDecimals), codeSha256: paymentBytecode ? createHash('sha256').update(paymentBytecode).digest('hex') : null },
   deployment: { estimatedGas: estimatedGas === undefined ? undefined : BigInt(estimatedGas).toString(), estimatedGasCostWei: estimatedGas === undefined ? undefined : (BigInt(estimatedGas) * gasPrice).toString(), gasPriceWei: gasPrice.toString(), error: estimateError, sourceSha256: artifact.sourceSha256, creationBytes: (artifact.bytecode.length - 2) / 2, deployedBytes: (artifact.deployedBytecode.length - 2) / 2 },
 }, null, 2));
