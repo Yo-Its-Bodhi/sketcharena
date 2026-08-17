@@ -41,6 +41,7 @@ Updated: 2026-08-17
 - [x] Contract compile and disposable-chain adversarial suite.
 - [ ] One irreversible gate remains: deploy the reviewed collection from the approved owner wallet, then configure its address and run one free-mint canary on Shido mainnet.
 - [x] Added a two-stage Backstage deployment review using the checked-in artifact, exact approved roles and owner-wallet-only signing. The collection constructor starts paused.
+- [x] Verified the compiled artifact against Shido mainnet: Paris EVM target, chain 9008, live WSHIDO identity/code, owner gas balance and successful 3,469,589-gas deployment estimate. This caught and removed an incompatible Shanghai `PUSH0` artifact before deployment.
 
 ## Milestone 5 — Production release
 

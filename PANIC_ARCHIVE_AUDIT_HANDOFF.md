@@ -11,13 +11,15 @@ This document fixes the intended review boundary for `SketchArenaPanicArchive.so
 | Contract | `contracts/SketchArenaPanicArchive.sol` |
 | Current source SHA-256 | `e5ab07960b07fc53cb09ffec57cd4661dc1c42b511441d821d9f64a846740fe1` |
 | Adversarial harness | `scripts/test-panic-archive.mjs` |
-| Current harness SHA-256 | `7a73a5ea12541ba84727aa36b45b0a6a0f97dea104d441b363816d6a2e57ec69` |
+| Current harness SHA-256 | `4e627098561e4696f29d9f752687a7f74313a6b6ff2c7083cc9969558434c465` |
+| Deployment artifact SHA-256 | `a0c4b90cdfd4e58307a664f1de5ccefb079cc46694163f942589dabf20471abd` |
 | Compiler | Solidity `0.8.26` |
+| EVM target | `paris` (Shido-compatible; excludes Shanghai `PUSH0`) |
 | Optimizer | enabled, 200 runs |
 | OpenZeppelin | `@openzeppelin/contracts@4.9.6` |
 | Ethers | `6.15.0` |
 | Local chain | Hardhat `3.13.0`, chain ID `31337` |
-| Optimized deployed size | 14,108 bytes |
+| Optimized deployed size | 14,381 bytes |
 | Intended production chain | Shido EVM, chain ID `9008` |
 
 Recalculate both hashes from the submitted release commit. A mismatch is a review stop, not a warning.
@@ -67,15 +69,15 @@ Its seeded 24-case property campaign varies price, nonce, expiry, season, campai
 
 | Role | Required production form | Must not possess |
 | --- | --- | --- |
-| Owner | reviewed multisig | voucher hot key |
+| Owner | approved self-custodied admin wallet; migrate to a reviewed multisig when available | voucher hot key |
 | Voucher signer | dedicated, monitored signing key in a managed secret service | ownership, payout control |
 | Payout receiver | treasury/multisig-approved receiver | voucher signing authority unless explicitly reviewed |
 | Player | self-custodied recipient wallet | server or owner secrets |
 | Backstage operator | named application account with least-privilege role | raw signer or owner key |
 
-Signer rotation, owner recovery, emergency pause and compromised-key response must be rehearsed on testnet before mainnet.
+Signer rotation, owner recovery, emergency pause and compromised-key response were exercised on the local ephemeral chain. The product owner explicitly selected a paused mainnet canary because no usable Shido testnet is available.
 
-## Parameters that must be approved before testnet deployment
+## Approved deployment parameters
 
 Record approved values and approvers in the release ticket. Blank values prohibit deployment.
 
@@ -96,7 +98,7 @@ Record approved values and approvers in the release ticket. Blank values prohibi
 | Minimum confirmation depth | 3 confirmations; approved by product owner |
 | Marketplace-approved collection process | **TBD / evidence required** |
 
-Mainnet addresses and economics require a separate approval after the testnet report. Testnet approval is not mainnet approval.
+The exact Paris-targeted creation transaction was successfully estimated against Shido mainnet on 2026-08-17 at 3,469,589 gas. Gas price and final wallet cost remain live network values and must be reviewed in the wallet at signing time.
 
 ## Required independent-review output
 

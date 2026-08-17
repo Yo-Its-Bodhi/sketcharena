@@ -16,6 +16,7 @@ const input = {
   language: 'Solidity',
   sources: { 'contracts/SketchArenaPanicArchive.sol': { content: readFileSync(contractPath, 'utf8') } },
   settings: {
+    evmVersion: 'paris',
     optimizer: { enabled: true, runs: 200 },
     outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object'] } },
   },
@@ -45,6 +46,7 @@ else {
     writeFileSync(artifactPath, `${JSON.stringify({
       contractName: 'SketchArenaPanicArchive',
       compiler: solc.version(),
+      evmVersion: input.settings.evmVersion,
       sourceSha256: createHash('sha256').update(input.sources['contracts/SketchArenaPanicArchive.sol'].content).digest('hex'),
       abi: contract.abi,
       bytecode: `0x${contract.evm.bytecode.object}`,

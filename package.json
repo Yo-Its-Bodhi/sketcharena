@@ -16,6 +16,7 @@
     "contract:artifact": "node scripts/compile-panic-archive.mjs --write-artifact",
     "contract:test:live": "node scripts/test-panic-archive.mjs",
     "contract:test:ci": "node scripts/test-contract-ci.mjs",
+    "contract:mainnet-readiness": "node scripts/check-panic-archive-mainnet.mjs",
     "ops:backup": "node scripts/backup-data.mjs",
     "ops:backup:verify": "node scripts/backup-data.mjs --verify",
     "ops:backup:postgres": "node scripts/backup-postgres.mjs",

@@ -48,7 +48,7 @@ contract MockWSHIDO is ERC20 {
   constructor() ERC20("Wrapped Shido", "WSHIDO") {}
   function mint(address recipient, uint256 amount) external { _mint(recipient, amount); }
 }`;
-const input = { language: 'Solidity', sources: { 'contracts/SketchArenaPanicArchive.sol': { content: contractSource }, 'contracts/test/ReentrantReceiver.sol': { content: reentrantReceiverSource }, 'contracts/test/MockWSHIDO.sol': { content: mockTokenSource } }, settings: { optimizer: { enabled: true, runs: 200 }, outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } } };
+const input = { language: 'Solidity', sources: { 'contracts/SketchArenaPanicArchive.sol': { content: contractSource }, 'contracts/test/ReentrantReceiver.sol': { content: reentrantReceiverSource }, 'contracts/test/MockWSHIDO.sol': { content: mockTokenSource } }, settings: { evmVersion: 'paris', optimizer: { enabled: true, runs: 200 }, outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } } };
 const findImport = (name) => {
   for (const candidate of [resolve(process.cwd(), name), resolve(process.cwd(), 'node_modules', name), resolve(siblingModules, name)]) {
     try { return { contents: readFileSync(candidate, 'utf8') }; } catch { /* continue */ }

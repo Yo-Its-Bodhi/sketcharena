@@ -15,10 +15,10 @@ export const PANIC_ARCHIVE_DEPLOYMENT = {
   artistRoyaltyBps: 500,
 } as const;
 
-type Artifact = { contractName: string; compiler: string; sourceSha256: string; abi: Abi; bytecode: Hex; deployedBytecode: Hex };
+type Artifact = { contractName: string; compiler: string; evmVersion: string; sourceSha256: string; abi: Abi; bytecode: Hex; deployedBytecode: Hex };
 export type PanicArchiveDeploymentTransaction = {
   chainId: number; chainName: string; nativeCurrency: MintConfiguration['nativeCurrency']; rpcUrls: string[]; blockExplorerUrl?: string;
-  owner: Address; request: { value: '0x0'; data: Hex }; artifact: { contractName: string; compiler: string; sourceSha256: string; deployedBytes: number };
+  owner: Address; request: { value: '0x0'; data: Hex }; artifact: { contractName: string; compiler: string; evmVersion: string; sourceSha256: string; deployedBytes: number };
   parameters: { mintSigner: Address; payoutReceiver: Address; paymentToken: Address; maxSupply: string; maxMintPrice: string; collectionMetadataURI: string; artistRoyaltyPercent: number; startsPaused: true };
 };
 
@@ -28,13 +28,13 @@ export function preparePanicArchiveDeployment(config: MintConfiguration, artifac
   let artifact: Artifact;
   try { artifact = JSON.parse(readFileSync(artifactPath, 'utf8')) as Artifact; }
   catch { throw new MintServiceError('The reviewed Panic Archive deployment artifact is unavailable.', 503); }
-  if (artifact.contractName !== 'SketchArenaPanicArchive' || !artifact.bytecode?.startsWith('0x') || artifact.bytecode.length < 10) throw new MintServiceError('The reviewed Panic Archive deployment artifact is invalid.', 503);
+  if (artifact.contractName !== 'SketchArenaPanicArchive' || artifact.evmVersion !== 'paris' || !artifact.bytecode?.startsWith('0x') || artifact.bytecode.length < 10) throw new MintServiceError('The reviewed Panic Archive deployment artifact is invalid or targets an unsupported EVM version.', 503);
   const args = Object.values(PANIC_ARCHIVE_DEPLOYMENT);
   const data = encodeDeployData({ abi: artifact.abi, bytecode: artifact.bytecode, args });
   return {
     chainId: config.chainId, chainName: config.chainName, nativeCurrency: config.nativeCurrency, rpcUrls: config.walletRpcUrls, blockExplorerUrl: config.explorerUrl,
     owner: PANIC_ARCHIVE_DEPLOYMENT.owner, request: { value: '0x0', data },
-    artifact: { contractName: artifact.contractName, compiler: artifact.compiler, sourceSha256: artifact.sourceSha256, deployedBytes: (artifact.deployedBytecode.length - 2) / 2 },
+    artifact: { contractName: artifact.contractName, compiler: artifact.compiler, evmVersion: artifact.evmVersion, sourceSha256: artifact.sourceSha256, deployedBytes: (artifact.deployedBytecode.length - 2) / 2 },
     parameters: { mintSigner: PANIC_ARCHIVE_DEPLOYMENT.mintSigner, payoutReceiver: PANIC_ARCHIVE_DEPLOYMENT.payoutReceiver, paymentToken: PANIC_ARCHIVE_DEPLOYMENT.paymentToken,
       maxSupply: PANIC_ARCHIVE_DEPLOYMENT.maxSupply.toString(), maxMintPrice: PANIC_ARCHIVE_DEPLOYMENT.maxMintPrice.toString(), collectionMetadataURI: PANIC_ARCHIVE_DEPLOYMENT.collectionMetadataURI,
       artistRoyaltyPercent: PANIC_ARCHIVE_DEPLOYMENT.artistRoyaltyBps / 100, startsPaused: true },

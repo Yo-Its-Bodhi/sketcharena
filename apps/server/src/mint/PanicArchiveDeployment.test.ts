@@ -17,6 +17,7 @@ describe('Panic Archive deployment preparation', () => {
     expect(transaction.owner).toBe(PANIC_ARCHIVE_DEPLOYMENT.owner);
     expect(transaction.chainId).toBe(9008);
     expect(transaction.request.data.startsWith('0x')).toBe(true);
+    expect(transaction.artifact.evmVersion).toBe('paris');
     expect(transaction.parameters).toMatchObject({ startsPaused: true, artistRoyaltyPercent: 5, collectionMetadataURI: 'https://sketch.bodhix.io/api/archive/metadata' });
     expect(transaction.artifact.deployedBytes).toBeGreaterThan(10_000);
     const encodedArguments = encodeAbiParameters(parseAbiParameters('address,address,address,address,uint256,uint256,string,uint96'), [PANIC_ARCHIVE_DEPLOYMENT.owner, PANIC_ARCHIVE_DEPLOYMENT.mintSigner, PANIC_ARCHIVE_DEPLOYMENT.payoutReceiver, PANIC_ARCHIVE_DEPLOYMENT.paymentToken, PANIC_ARCHIVE_DEPLOYMENT.maxSupply, PANIC_ARCHIVE_DEPLOYMENT.maxMintPrice, PANIC_ARCHIVE_DEPLOYMENT.collectionMetadataURI, BigInt(PANIC_ARCHIVE_DEPLOYMENT.artistRoyaltyBps)]);
