@@ -134,6 +134,7 @@ const reportPlayerSchema = z.object({ playerId: z.string().min(1).max(24), categ
 const reportStatusSchema = z.enum(['open', 'reviewing', 'resolved', 'dismissed']);
 const reportUpdateSchema = z.object({ status: reportStatusSchema, resolutionNote: z.string().trim().min(3).max(500) });
 const equipItemSchema = z.object({ itemId: z.string().trim().min(2).max(80) });
+const leaderboardPeriodSchema = z.enum(['weekly', 'monthly', 'season', 'all-time']);
 const strokeSchema: z.ZodType<Stroke> = z.object({
   id: z.string().min(1).max(64), tool: z.enum(['pencil', 'eraser', 'fill']), color: z.string().regex(/^#[0-9a-f]{6}$/i),
   size: z.number().min(1).max(160), points: z.array(z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), pressure: z.number().min(0).max(1).optional() })).min(1).max(GAME.maxPointsPerStroke),
@@ -284,6 +285,10 @@ app.get('/api/progression', async (request, response) => {
   return player ? response.json(player) : response.status(404).json({ error: 'Player profile not found' });
 });
 app.get('/api/season/items', (_request, response) => response.json(SEASON_ITEMS));
+app.get('/api/leaderboards', async (request, response) => {
+  const period = leaderboardPeriodSchema.catch('weekly').parse(request.query.period);
+  return response.json(await progression.leaderboard(period, Date.now(), 100));
+});
 app.post('/api/progression/equip', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request); if (!ownerSessionId) return response.status(401).json({ error: 'Player authentication required' });
   const parsed = equipItemSchema.safeParse(request.body); if (!parsed.success) return response.status(400).json({ error: 'Cosmetic selection is invalid' });
@@ -349,6 +354,28 @@ app.get('/api/admin/players', async (request, response) => {
   if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
   const search = z.string().max(80).catch('').parse(request.query.search); return response.json(await progression.listPlayers(search));
 });
+app.get('/api/admin/leaderboard-prizes/preview', async (request, response) => {
+  if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
+  const period = z.enum(['weekly', 'monthly']).catch('weekly').parse(request.query.period);
+  const board = await progression.leaderboard(period, closedPeriodReference(period, Date.now()), 10);
+  return response.json({ ...board, label: `Most recently closed ${period === 'weekly' ? 'week' : 'month'} · ${board.periodKey}` });
+});
+app.post('/api/admin/leaderboard-prizes/award', async (request, response) => {
+  const principal = authorizeAdmin(request.headers.authorization, request.ip, 'admin'); if (!principal) return response.status(adminStatus()).json({ error: adminError('admin') });
+  const parsed = z.object({ period: z.enum(['weekly', 'monthly']), periodKey: z.string().min(4).max(16), confirmation: z.literal('AWARD LEADERBOARD PRIZES') }).safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: 'Prize confirmation is invalid' });
+  const board = await progression.leaderboard(parsed.data.period, closedPeriodReference(parsed.data.period, Date.now()), 10);
+  if (board.periodKey !== parsed.data.periodKey) return response.status(409).json({ error: 'That leaderboard period is no longer current. Preview again.' });
+  const winners = board.entries.filter((entry) => entry.rank <= 3); const results: Array<{ sessionId: string; name: string; rank: number; granted: number }> = [];
+  for (const winner of winners) {
+    const prefix = `leaderboard-${board.period}-${board.periodKey}-rank-${winner.rank}`;
+    const badge = await progression.grant({ sessionIds: [winner.sessionId], kind: 'achievement', amount: 1, itemId: `${prefix}-badge`, reason: `${board.label} · leaderboard rank #${winner.rank}`, campaignId: `${prefix}-badge`, idempotencyKey: `${prefix}-${winner.sessionId}-badge`, actor: `backstage:${principal.name}` });
+    const value = board.period === 'weekly' ? [750, 500, 300][winner.rank - 1]! : [2, 1, 1][winner.rank - 1]!;
+    const reward = await progression.grant({ sessionIds: [winner.sessionId], kind: board.period === 'weekly' ? 'xp' : 'mint-credit', amount: value, reason: `${board.label} · leaderboard prize #${winner.rank}`, campaignId: `${prefix}-reward`, idempotencyKey: `${prefix}-${winner.sessionId}-reward`, actor: `backstage:${principal.name}` });
+    results.push({ sessionId: winner.sessionId, name: winner.name, rank: winner.rank, granted: badge.granted + reward.granted });
+  }
+  return response.status(201).json({ period: board.period, periodKey: board.periodKey, winners: results });
+});
 app.post('/api/admin/grants', async (request, response) => {
   const principal = authorizeAdmin(request.headers.authorization, request.ip, 'operator'); if (!principal) return response.status(adminStatus()).json({ error: adminError('operator') });
   const parsed = grantSchema.safeParse(request.body); if (!parsed.success) return response.status(400).json({ error: 'Reward grant is invalid' });
@@ -402,7 +429,7 @@ app.get('/api/admin/contract-deployment/prepare', (request, response) => {
 io.on('connection', (socket) => {
   let sessionId: string | null = null;
   let playerName = '';
-  let avatarItem: string | undefined;
+  let equipped: { avatar?: string; title?: string; frame?: string; reaction?: string } = {};
 
   socket.on('session:resume', async (payload, ack) => {
     const parsed = sessionSchema.safeParse(payload);
@@ -414,13 +441,13 @@ io.on('connection', (socket) => {
     } else if (parsed.data.credential) sessionId = sessionIdFromCredential(parsed.data.credential);
     else return ack({ ok: false, error: 'Your player session expired—sign in again' });
     playerName = parsed.data.name;
-    try { avatarItem = (await progression.ensurePlayer(sessionId, playerName)).equipped.avatar; }
+    try { equipped = (await progression.ensurePlayer(sessionId, playerName)).equipped; }
     catch { return ack({ ok: false, error: 'Could not load your player profile' }); }
     ack({ ok: true, data: { sessionId } });
     for (const room of rooms.values()) {
       if (!room.hasSession(sessionId)) continue;
       const replacedSocketId = room.socketIdForSession(sessionId);
-      room.join(sessionId, socket.id, playerName, avatarItem);
+      room.join(sessionId, socket.id, playerName, equipped);
       socket.join(room.id);
       if (replacedSocketId && replacedSocketId !== socket.id) {
         const replacedSocket = io.sockets.sockets.get(replacedSocketId);
@@ -437,19 +464,20 @@ io.on('connection', (socket) => {
 
   socket.on('rooms:subscribe', () => socket.emit('rooms:list', publicRooms()));
 
-  socket.on('room:create', (payload, ack) => guarded(socket.id, ack, () => {
+  socket.on('room:create', (payload, ack) => guarded(socket.id, ack, async () => {
     requireSession(sessionId);
     requireCurrentSocketOrNoRoom(sessionId, socket.id);
     const input = roomCreateSchema.parse(payload);
+    equipped = (await progression.getPlayer(sessionId!))?.equipped ?? equipped;
     leaveCurrent(sessionId!, socket.id);
     const room = new GameRoom(input.name, input.category, input.isPrivate, input.maxPlayers, input.roundSeconds * 1000);
     rooms.set(room.id, room); bindRoom(room);
-    socket.join(room.id); room.join(sessionId!, socket.id, playerName, avatarItem); socket.emit('room:state', room.view());
+    socket.join(room.id); room.join(sessionId!, socket.id, playerName, equipped); socket.emit('room:state', room.view());
     broadcastRooms();
     return { room: room.view(), inviteCode: room.inviteCode ?? undefined };
   }));
 
-  socket.on('room:join', (payload, ack) => guarded(socket.id, ack, () => {
+  socket.on('room:join', (payload, ack) => guarded(socket.id, ack, async () => {
     requireSession(sessionId);
     requireCurrentSocketOrNoRoom(sessionId, socket.id);
     const input = roomJoinSchema.parse(payload);
@@ -458,8 +486,9 @@ io.on('connection', (socket) => {
       : rooms.get(input.roomId!);
     if (!room) throw new Error('Arena not found');
     if (room.isPrivate && room.inviteCode !== input.inviteCode?.toUpperCase()) throw new Error('Invite code required');
+    equipped = (await progression.getPlayer(sessionId!))?.equipped ?? equipped;
     leaveCurrent(sessionId!, socket.id);
-    socket.join(room.id); room.join(sessionId!, socket.id, playerName, avatarItem); socket.emit('room:state', room.view()); broadcastRooms();
+    socket.join(room.id); room.join(sessionId!, socket.id, playerName, equipped); socket.emit('room:state', room.view()); broadcastRooms();
     return { room: room.view() };
   }));
 
@@ -495,7 +524,8 @@ io.on('connection', (socket) => {
   }));
   socket.on('chat:send', (payload, ack) => guarded(socket.id, ack, () => { const input = textSchema.parse(payload); currentRoomForSocket(sessionId, socket.id).sendChat(sessionId!, input.text); return undefined; }));
   socket.on('reaction:send', (payload, ack) => guarded(socket.id, ack, () => {
-    const emoji = z.enum(['😂', '🔥', '💀', '👏', '🤯', '❤️']).parse(payload.emoji); currentRoomForSocket(sessionId, socket.id).react(sessionId!, emoji); return undefined;
+    const allowed = ['😂', '🔥', '💀', '👏', '🤯', '❤️', ...(equipped.reaction === 'screaming-pencil-reaction' ? ['✏️'] : []), ...(equipped.reaction === 'tiny-fire-reaction' ? ['🧨'] : [])];
+    const emoji = z.string().refine((value) => allowed.includes(value), 'That reaction is not unlocked').parse(payload.emoji); currentRoomForSocket(sessionId, socket.id).react(sessionId!, emoji); return undefined;
   }));
   socket.on('draw:stroke', (stroke, ack) => guarded(socket.id, ack, () => {
     if (!drawLimit.take(socket.id)) throw new Error('Too many marks arrived at once—try that stroke again');
@@ -537,8 +567,13 @@ function bindRoom(room: GameRoom): void {
 
 async function awardMatchProgress(result: MatchResult): Promise<void> {
   const fastestGuess = result.rounds.flatMap((round) => round.correct).sort((a, b) => a.elapsedMs - b.elapsedMs)[0];
+  await progression.recordMatch({ matchId: result.matchId, endedAt: Math.max(...result.rounds.map((round) => round.endedAt), Date.now()), players: result.standings.map((player) => ({
+    sessionId: player.sessionId, gamePoints: player.score, won: result.winners.some((winner) => winner.sessionId === player.sessionId), sharedWin: result.winners.length > 1 && result.winners.some((winner) => winner.sessionId === player.sessionId),
+    correctGuesses: result.rounds.reduce((total, round) => total + Number(round.correct.some((guess) => guess.playerId === player.id)), 0), fastestGuesses: fastestGuess && result.rounds.some((round) => round.correct.some((guess) => guess.playerId === player.id && guess.elapsedMs === fastestGuess.elapsedMs)) ? 1 : 0,
+    drawings: result.rounds.filter((round) => round.drawerId === player.id && round.reason !== 'drawer-left').length,
+  })) });
   for (const player of result.standings) {
-    const matchKey = `match-${result.roomId}-${player.sessionId}`;
+    const matchKey = `match-${result.matchId}-${player.sessionId}`;
     const xp = 100 + Math.min(400, Math.floor(player.score / 100) * 25);
     await progression.grant({ sessionIds: [player.sessionId], kind: 'xp', amount: xp, reason: `Finished a match · +${xp} Season XP`, campaignId: `${matchKey}-xp`, idempotencyKey: `${matchKey}-xp`, actor: 'system:match' });
     await progression.grant({ sessionIds: [player.sessionId], kind: 'achievement', amount: 1, itemId: 'first-mess', reason: 'Played your first complete Sketch Arena match', campaignId: 'achievement-first-mess', idempotencyKey: `${matchKey}-first-mess`, actor: 'system:match' });
@@ -607,6 +642,7 @@ function authorizeMetrics(authorization: string | undefined): boolean {
   return timingSafeEqual(METRICS_TOKEN_HASH, createHash('sha256').update(supplied).digest());
 }
 function prometheusLabel(value: string): string { return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', '\\n').slice(0, 120); }
+function closedPeriodReference(period: 'weekly' | 'monthly', now: number): number { if (period === 'weekly') return now - 7 * 86_400_000; const date = new Date(now); return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() - 1, 15); }
 function sendMintError(response: express.Response, error: unknown): express.Response { return response.status(error instanceof MintServiceError ? error.status : 500).json({ error: error instanceof Error ? error.message : 'Minting could not continue' }); }
 function guarded<T>(key: string, ack: (value: { ok: boolean; data?: T; error?: string }) => void, action: () => T | Promise<T>): void {
   if (!actionLimit.take(key)) { metricCounters.rateLimited += 1; metricCounters.socketRejected += 1; return ack({ ok: false, error: 'Slow down for a moment' }); }

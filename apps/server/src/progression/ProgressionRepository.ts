@@ -28,11 +28,19 @@ export interface PlayerProgress {
   battlePass: 'free' | 'premium';
   achievements: string[];
   items: string[];
-  equipped: { avatar?: string; brush?: string };
+  equipped: { avatar?: string; brush?: string; reaction?: string; title?: string; frame?: string };
+  competitive: CompetitiveProfile;
   rewards: RewardEntitlement[];
   firstSeenAt: number;
   lastSeenAt: number;
 }
+
+export interface CompetitiveTotals { chaosScore: number; matches: number; wins: number; sharedWins: number; correctGuesses: number; fastestGuesses: number; drawings: number; gamePoints: number; }
+export interface CompetitiveProfile { allTime: CompetitiveTotals; season: CompetitiveTotals; weeks: Record<string, CompetitiveTotals>; months: Record<string, CompetitiveTotals>; }
+export type LeaderboardPeriod = 'weekly' | 'monthly' | 'season' | 'all-time';
+export interface LeaderboardEntry extends CompetitiveTotals { rank: number; sessionId: string; name: string; level: number; avatarItem?: string; titleItem?: string; frameItem?: string; }
+export interface LeaderboardResult { period: LeaderboardPeriod; periodKey: string; label: string; startsAt?: number; endsAt?: number; scoring: string[]; prizes: Array<{ rank: string; label: string; detail: string }>; entries: LeaderboardEntry[]; }
+export interface MatchProgressInput { matchId: string; endedAt: number; players: Array<{ sessionId: string; gamePoints: number; won: boolean; sharedWin: boolean; correctGuesses: number; fastestGuesses: number; drawings: number }> }
 
 export interface RewardGrantInput {
   sessionIds: string[];
@@ -58,19 +66,23 @@ export interface AdminAuditEntry {
   at: number;
 }
 
-interface ProgressionState { players: PlayerProgress[]; audit: AdminAuditEntry[]; appliedKeys: string[]; redemptionKeys: string[]; }
+interface ProgressionState { players: PlayerProgress[]; audit: AdminAuditEntry[]; appliedKeys: string[]; redemptionKeys: string[]; matchKeys: string[]; }
 
 const SEASON_LEVEL_REWARDS: Array<{ level: number; kind: 'mint-credit' | 'item' | 'achievement'; amount: number; itemId?: string; reason: string }> = [
   { level: 2, kind: 'item', amount: 1, itemId: 'yellow-weirdo-avatar', reason: 'Season 0 Level 2 · Yellow Weirdo avatar' },
   { level: 3, kind: 'mint-credit', amount: 1, reason: 'Season 0 Level 3 · free Panic Archive mint' },
   { level: 5, kind: 'item', amount: 1, itemId: 'panic-pencil', reason: 'Season 0 Level 5 · Panic Pencil cosmetic' },
+  { level: 7, kind: 'item', amount: 1, itemId: 'screaming-pencil-reaction', reason: 'Season 0 Level 7 · Screaming Pencil reaction' },
   { level: 10, kind: 'mint-credit', amount: 2, reason: 'Season 0 Level 10 · two free Panic Archive mints' },
+  { level: 12, kind: 'item', amount: 1, itemId: 'beautiful-disaster-title', reason: 'Season 0 Level 12 · Beautiful Disaster title' },
+  { level: 15, kind: 'item', amount: 1, itemId: 'taped-masterpiece-frame', reason: 'Season 0 Level 15 · Taped Masterpiece profile frame' },
   { level: 20, kind: 'achievement', amount: 1, itemId: 'first-mess-finisher', reason: 'Completed the Season 0 progression track' },
 ];
 const PREMIUM_LEVEL_REWARDS: Array<{ level: number; kind: 'mint-credit' | 'item'; amount: number; itemId?: string; reason: string }> = [
   { level: 1, kind: 'item', amount: 1, itemId: 'green-chaos-avatar', reason: 'Premium Panic Pass · Green Chaos avatar' },
   { level: 3, kind: 'mint-credit', amount: 1, reason: 'Premium Panic Pass Level 3 · bonus free mint' },
   { level: 5, kind: 'item', amount: 1, itemId: 'neon-panic-brush', reason: 'Premium Panic Pass Level 5 · Neon Panic brush' },
+  { level: 7, kind: 'item', amount: 1, itemId: 'tiny-fire-reaction', reason: 'Premium Panic Pass Level 7 · Tiny Fire reaction' },
   { level: 10, kind: 'mint-credit', amount: 2, reason: 'Premium Panic Pass Level 10 · two bonus free mints' },
   { level: 20, kind: 'item', amount: 1, itemId: 'golden-chaos-avatar', reason: 'Premium Panic Pass Level 20 · Golden Chaos avatar' },
 ];
@@ -80,6 +92,10 @@ export const SEASON_ITEMS = [
   { id: 'golden-chaos-avatar', name: 'Golden Chaos', description: 'Season finisher energy with questionable talent.', slot: 'avatar', rarity: 'legendary', previewColor: '#f2c94c' },
   { id: 'panic-pencil', name: 'Panic Pencil', description: 'A hot-red drawing cursor and Studio brush accent.', slot: 'brush', rarity: 'rare', previewColor: '#e54b3e' },
   { id: 'neon-panic-brush', name: 'Neon Panic', description: 'An electric premium brush accent for the Studio.', slot: 'brush', rarity: 'epic', previewColor: '#8b5cf6' },
+  { id: 'screaming-pencil-reaction', name: 'Screaming Pencil', description: 'An exclusive reaction for drawings that have seen things.', slot: 'reaction', rarity: 'rare', previewColor: '#ffb703', glyph: '✏️' },
+  { id: 'tiny-fire-reaction', name: 'Tiny Fire', description: 'Premium portable arson for the reaction rail.', slot: 'reaction', rarity: 'epic', previewColor: '#ef476f', glyph: '🧨' },
+  { id: 'beautiful-disaster-title', name: 'Beautiful Disaster', description: 'A player title displayed beneath your name.', slot: 'title', rarity: 'epic', previewColor: '#27ae8a' },
+  { id: 'taped-masterpiece-frame', name: 'Taped Masterpiece', description: 'A wonky gallery frame around your Arena face.', slot: 'frame', rarity: 'epic', previewColor: '#2878ff' },
 ] as const;
 
 export interface ProgressionRepository {
@@ -91,24 +107,31 @@ export interface ProgressionRepository {
   consumeMintCredit(sessionId: string, rewardId: string, idempotencyKey: string, amount?: number): Promise<PlayerProgress>;
   consumeMintDiscount(sessionId: string, rewardId: string, idempotencyKey: string, amount?: number): Promise<PlayerProgress>;
   equipItem(sessionId: string, itemId: string): Promise<PlayerProgress>;
+  recordMatch(input: MatchProgressInput): Promise<{ recorded: boolean }>;
+  leaderboard(period: LeaderboardPeriod, now?: number, limit?: number): Promise<LeaderboardResult>;
   audit(limit?: number): Promise<AdminAuditEntry[]>;
 }
 
 function cleanState(value?: Partial<ProgressionState>): ProgressionState {
-  return { players: value?.players ?? [], audit: value?.audit ?? [], appliedKeys: value?.appliedKeys ?? [], redemptionKeys: value?.redemptionKeys ?? [] };
+  return { players: value?.players ?? [], audit: value?.audit ?? [], appliedKeys: value?.appliedKeys ?? [], redemptionKeys: value?.redemptionKeys ?? [], matchKeys: value?.matchKeys ?? [] };
 }
+
+const emptyTotals = (): CompetitiveTotals => ({ chaosScore: 0, matches: 0, wins: 0, sharedWins: 0, correctGuesses: 0, fastestGuesses: 0, drawings: 0, gamePoints: 0 });
+const emptyCompetitive = (): CompetitiveProfile => ({ allTime: emptyTotals(), season: emptyTotals(), weeks: {}, months: {} });
+function normalizePlayer(player: PlayerProgress): PlayerProgress { player.equipped ??= {}; player.competitive ??= emptyCompetitive(); player.competitive.allTime ??= emptyTotals(); player.competitive.season ??= emptyTotals(); player.competitive.weeks ??= {}; player.competitive.months ??= {}; return player; }
 
 export function ensurePlayerInState(state: ProgressionState, sessionId: string, name: string, now: number): PlayerProgress {
   const existing = state.players.find((player) => player.sessionId === sessionId);
   if (existing) {
     existing.name = name;
     existing.lastSeenAt = now;
-    existing.equipped ??= {};
+    normalizePlayer(existing);
     ensureFirstMintCredit(existing, now);
+    applySeasonLevelRewards(existing, now);
     return existing;
   }
   const player: PlayerProgress = {
-    sessionId, name, seasonId: 'season-0', xp: 0, level: 1, battlePass: 'free', achievements: [], items: [], equipped: {}, rewards: [],
+    sessionId, name, seasonId: 'season-0', xp: 0, level: 1, battlePass: 'free', achievements: [], items: [], equipped: {}, competitive: emptyCompetitive(), rewards: [],
     firstSeenAt: now, lastSeenAt: now,
   };
   ensureFirstMintCredit(player, now);
@@ -183,6 +206,40 @@ export function equipItemInState(state: ProgressionState, sessionId: string, ite
   player.equipped ??= {}; player.equipped[item.slot] = itemId; return player;
 }
 
+export function recordMatchInState(state: ProgressionState, input: MatchProgressInput): { recorded: boolean } {
+  if (state.matchKeys.includes(input.matchId)) return { recorded: false };
+  const week = utcWeekKey(input.endedAt); const month = utcMonthKey(input.endedAt);
+  for (const result of input.players) {
+    const player = state.players.find((candidate) => candidate.sessionId === result.sessionId); if (!player) continue;
+    normalizePlayer(player);
+    const delta: CompetitiveTotals = { chaosScore: 100 + (result.won ? result.sharedWin ? 175 : 250 : 0) + result.correctGuesses * 75 + result.fastestGuesses * 100 + result.drawings * 40,
+      matches: 1, wins: result.won ? 1 : 0, sharedWins: result.sharedWin ? 1 : 0, correctGuesses: result.correctGuesses, fastestGuesses: result.fastestGuesses, drawings: result.drawings, gamePoints: result.gamePoints };
+    addTotals(player.competitive.allTime, delta); addTotals(player.competitive.season, delta);
+    player.competitive.weeks[week] ??= emptyTotals(); player.competitive.months[month] ??= emptyTotals();
+    addTotals(player.competitive.weeks[week]!, delta); addTotals(player.competitive.months[month]!, delta);
+    player.competitive.weeks = keepRecent(player.competitive.weeks, 16); player.competitive.months = keepRecent(player.competitive.months, 18);
+  }
+  state.matchKeys.push(input.matchId); state.matchKeys = state.matchKeys.slice(-10_000); return { recorded: true };
+}
+
+export function buildLeaderboard(players: PlayerProgress[], period: LeaderboardPeriod, now = Date.now(), limit = 100): LeaderboardResult {
+  const week = utcWeekKey(now); const month = utcMonthKey(now); const range = periodRange(period, now);
+  const values = players.map(normalizePlayer).map((player) => ({ sessionId: player.sessionId, name: player.name, level: player.level, avatarItem: player.equipped.avatar, titleItem: player.equipped.title, frameItem: player.equipped.frame,
+    ...(period === 'weekly' ? player.competitive.weeks[week] ?? emptyTotals() : period === 'monthly' ? player.competitive.months[month] ?? emptyTotals() : period === 'season' ? player.competitive.season : player.competitive.allTime) }))
+    .filter((entry) => entry.matches > 0).sort((a, b) => b.chaosScore - a.chaosScore || b.wins - a.wins || b.correctGuesses - a.correctGuesses || b.gamePoints - a.gamePoints || a.name.localeCompare(b.name));
+  let previousScore = -1; let previousWins = -1; let rank = 0;
+  const entries = values.slice(0, Math.max(1, Math.min(250, limit))).map((entry, index) => { if (entry.chaosScore !== previousScore || entry.wins !== previousWins) rank = index + 1; previousScore = entry.chaosScore; previousWins = entry.wins; return { ...entry, rank }; });
+  return { period, periodKey: period === 'weekly' ? week : period === 'monthly' ? month : period === 'season' ? 'season-0' : 'all-time', label: range.label, startsAt: range.startsAt, endsAt: range.endsAt,
+    scoring: ['+100 finish an 8-drawing match', '+250 solo win · +175 shared crown', '+75 correct guess', '+100 fastest solve', '+40 completed drawing'], prizes: leaderboardPrizes(period), entries };
+}
+
+function addTotals(target: CompetitiveTotals, delta: CompetitiveTotals): void { for (const key of Object.keys(delta) as Array<keyof CompetitiveTotals>) target[key] += delta[key]; }
+function keepRecent(values: Record<string, CompetitiveTotals>, count: number): Record<string, CompetitiveTotals> { return Object.fromEntries(Object.entries(values).sort(([a], [b]) => b.localeCompare(a)).slice(0, count)); }
+export function utcMonthKey(now: number): string { const date = new Date(now); return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`; }
+export function utcWeekKey(now: number): string { const date = new Date(now); const day = date.getUTCDay() || 7; date.setUTCDate(date.getUTCDate() + 4 - day); const yearStart = Date.UTC(date.getUTCFullYear(), 0, 1); const week = Math.ceil((((date.getTime() - yearStart) / 86_400_000) + 1) / 7); return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`; }
+function periodRange(period: LeaderboardPeriod, now: number): { label: string; startsAt?: number; endsAt?: number } { const date = new Date(now); if (period === 'weekly') { const day = date.getUTCDay() || 7; const startsAt = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - day + 1); return { label: 'This week · resets Monday 00:00 UTC', startsAt, endsAt: startsAt + 7 * 86_400_000 }; } if (period === 'monthly') { const startsAt = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1); return { label: 'This month · resets on the 1st UTC', startsAt, endsAt: Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) }; } return { label: period === 'season' ? 'Season 0 · The First Mess' : 'All recorded chaos' }; }
+function leaderboardPrizes(period: LeaderboardPeriod): Array<{ rank: string; label: string; detail: string }> { if (period === 'weekly') return [{ rank: '#1', label: 'Weekly Chaos Crown', detail: 'Badge + 750 XP' }, { rank: '#2', label: 'Almost Functional', detail: 'Badge + 500 XP' }, { rank: '#3', label: 'Podium Gremlin', detail: 'Badge + 300 XP' }]; if (period === 'monthly') return [{ rank: '#1', label: 'Monthly Menace', detail: 'Badge + 2 Mint Credits' }, { rank: '#2', label: 'Certified Threat', detail: 'Badge + 1 Mint Credit' }, { rank: '#3', label: 'Public Nuisance', detail: 'Badge + 1 Mint Credit' }]; return [{ rank: 'TOP', label: period === 'season' ? 'Season rewards loading…' : 'Hall of Chaos', detail: 'Permanent bragging rights. Bigger prizes will be announced.' }]; }
+
 export function consumeMintCreditInState(state: ProgressionState, sessionId: string, rewardId: string, idempotencyKey: string, amount: number, now: number): PlayerProgress {
   return consumeMintBenefitInState(state, sessionId, rewardId, idempotencyKey, amount, now, 'mint-credit');
 }
@@ -222,6 +279,8 @@ export class MemoryProgressionRepository implements ProgressionRepository {
   async consumeMintCredit(sessionId: string, rewardId: string, idempotencyKey: string, amount = 1): Promise<PlayerProgress> { return structuredClone(consumeMintCreditInState(this.state, sessionId, rewardId, idempotencyKey, amount, this.clock())); }
   async consumeMintDiscount(sessionId: string, rewardId: string, idempotencyKey: string, amount = 1): Promise<PlayerProgress> { return structuredClone(consumeMintDiscountInState(this.state, sessionId, rewardId, idempotencyKey, amount, this.clock())); }
   async equipItem(sessionId: string, itemId: string): Promise<PlayerProgress> { return structuredClone(equipItemInState(this.state, sessionId, itemId)); }
+  async recordMatch(input: MatchProgressInput): Promise<{ recorded: boolean }> { return recordMatchInState(this.state, input); }
+  async leaderboard(period: LeaderboardPeriod, now = this.clock(), limit = 100): Promise<LeaderboardResult> { return structuredClone(buildLeaderboard(this.state.players, period, now, limit)); }
   async audit(limit = 100): Promise<AdminAuditEntry[]> { return structuredClone(this.state.audit.slice(0, limit)); }
 }
 
@@ -237,6 +296,8 @@ export class FileProgressionRepository implements ProgressionRepository {
   async consumeMintCredit(sessionId: string, rewardId: string, idempotencyKey: string, amount = 1): Promise<PlayerProgress> { const state = await this.load(); const player = consumeMintCreditInState(state, sessionId, rewardId, idempotencyKey, amount, this.clock()); await this.persist(state); return structuredClone(player); }
   async consumeMintDiscount(sessionId: string, rewardId: string, idempotencyKey: string, amount = 1): Promise<PlayerProgress> { const state = await this.load(); const player = consumeMintDiscountInState(state, sessionId, rewardId, idempotencyKey, amount, this.clock()); await this.persist(state); return structuredClone(player); }
   async equipItem(sessionId: string, itemId: string): Promise<PlayerProgress> { const state = await this.load(); const player = equipItemInState(state, sessionId, itemId); await this.persist(state); return structuredClone(player); }
+  async recordMatch(input: MatchProgressInput): Promise<{ recorded: boolean }> { const state = await this.load(); const result = recordMatchInState(state, input); await this.persist(state); return result; }
+  async leaderboard(period: LeaderboardPeriod, now = this.clock(), limit = 100): Promise<LeaderboardResult> { return structuredClone(buildLeaderboard((await this.load()).players, period, now, limit)); }
   async audit(limit = 100): Promise<AdminAuditEntry[]> { return structuredClone((await this.load()).audit.slice(0, limit)); }
   private async load(): Promise<ProgressionState> {
     if (this.state) return this.state;

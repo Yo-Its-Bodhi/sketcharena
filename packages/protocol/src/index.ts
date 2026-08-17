@@ -25,6 +25,8 @@ export interface PlayerView {
   name: string;
   avatarSeed: number;
   avatarItem?: string;
+  titleItem?: string;
+  frameItem?: string;
   score: number;
   roundScore: number;
   streak: number;
@@ -83,6 +85,7 @@ export interface RoundResult {
 }
 
 export interface MatchResult {
+  matchId: string;
   roomId: string;
   rounds: RoundResult[];
   standings: PlayerView[];
@@ -118,12 +121,19 @@ export interface PlayerProgress {
   battlePass: 'free' | 'premium';
   achievements: string[];
   items: string[];
-  equipped: { avatar?: string; brush?: string };
+  equipped: { avatar?: string; brush?: string; reaction?: string; title?: string; frame?: string };
+  competitive: CompetitiveProfile;
   rewards: RewardEntitlement[];
   firstSeenAt: number;
   lastSeenAt: number;
 }
-export interface SeasonItemDefinition { id: string; name: string; description: string; slot: 'avatar' | 'brush'; rarity: 'common' | 'rare' | 'epic' | 'legendary'; previewColor: string; }
+export type CosmeticSlot = 'avatar' | 'brush' | 'reaction' | 'title' | 'frame';
+export interface SeasonItemDefinition { id: string; name: string; description: string; slot: CosmeticSlot; rarity: 'common' | 'rare' | 'epic' | 'legendary'; previewColor: string; glyph?: string; }
+export interface CompetitiveTotals { chaosScore: number; matches: number; wins: number; sharedWins: number; correctGuesses: number; fastestGuesses: number; drawings: number; gamePoints: number; }
+export interface CompetitiveProfile { allTime: CompetitiveTotals; season: CompetitiveTotals; weeks: Record<string, CompetitiveTotals>; months: Record<string, CompetitiveTotals>; }
+export type LeaderboardPeriod = 'weekly' | 'monthly' | 'season' | 'all-time';
+export interface LeaderboardEntry extends CompetitiveTotals { rank: number; sessionId: string; name: string; level: number; avatarItem?: string; titleItem?: string; frameItem?: string; }
+export interface LeaderboardResponse { period: LeaderboardPeriod; periodKey: string; label: string; startsAt?: number; endsAt?: number; scoring: string[]; prizes: Array<{ rank: string; label: string; detail: string }>; entries: LeaderboardEntry[]; }
 
 export type ModerationReportCategory = 'harassment' | 'hate-or-threats' | 'spam' | 'cheating' | 'unsafe-art' | 'other';
 export type ModerationReportStatus = 'open' | 'reviewing' | 'resolved' | 'dismissed';

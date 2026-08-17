@@ -27,7 +27,15 @@ Updated: 2026-08-17
 - [x] Reward Inbox is notification/history; rewards are usable as soon as they are earned.
 - [x] Individual grants, audited global thank-you drops, free-mint credits, percentage discounts and capped promo codes.
 - [x] Backstage roles, audit trail, player ledger, promotion controls, moderation and contract access transaction preparation.
+- [x] Durable weekly, monthly, Season 0 and all-time leaderboards driven only by completed authoritative matches.
+- [x] Transparent Chaos Score: completion, crowns, correct guesses, fastest solve and completed drawing turns; abandoned games and guess spam earn nothing.
+- [x] Equal scores and wins share rank. The game never breaks a leaderboard tie with a hidden random choice.
+- [x] Badges/achievements plus usable avatars, brushes, reactions, player titles and profile frames.
+- [x] Weekly prize schedule (badges + XP) and monthly prize schedule (badges + Mint Credits), with a Backstage preview and explicit admin confirmation.
+- [x] Idempotent match receipts and prize campaign keys prevent replayed match events or repeated admin clicks from duplicating rewards.
 - [ ] Paid premium Panic Pass checkout remains a later commerce milestone; no price/provider has been approved.
+
+The Panic Pass is the seasonal progression track. Players earn XP through complete matches and unlock visible, usable identity rewards and occasional Mint Credits. Premium adds a parallel cosmetic/reward lane but never improves score, drawing tools, guessing power or leaderboard position.
 
 ## Milestone 4 — Panic Archive minting
 
@@ -48,7 +56,7 @@ Updated: 2026-08-17
 - [x] PostgreSQL-backed production domains, migrations, health endpoints, structured logs, backup verification and systemd/Nginx deployment shape.
 - [x] Browser smoke coverage for entry, Lobby, nine-deck setup, Studio controls, save/start-fresh and Vault persistence.
 - [x] Automated lint, production builds, server/web tests, operations tests and contract tests.
-- [ ] Push the audited commit and deploy only `/opt/sketch-arena/current`.
+- [ ] Push this leaderboard/reward release and deploy only `/opt/sketch-arena/current`.
 - [ ] Confirm the live release SHA, health, primary UI paths and mobile layout.
 - [ ] After contract deployment: verify one free canary mint, one paid quote without submission, public Archive indexing and NFTStudio marketplace handoff.
 

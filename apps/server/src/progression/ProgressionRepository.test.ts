@@ -73,4 +73,30 @@ describe('ProgressionRepository', () => {
     expect((await repository.getPlayer(player.sessionId))!.rewards.find((candidate) => candidate.id === reward.id)).toMatchObject({ redeemedAmount: 2, redeemedAt: 7777 });
     await expect(repository.consumeMintCredit(player.sessionId, reward.id, 'mint-three')).rejects.toThrow('unavailable');
   });
+
+  it('records completed matches once across weekly, monthly, season and all-time boards', async () => {
+    const now = Date.UTC(2026, 7, 17, 12); const repository = new MemoryProgressionRepository(() => now);
+    const alice = await repository.ensurePlayer('77777777-7777-4777-8777-777777777777', 'Alice');
+    const bob = await repository.ensurePlayer('88888888-8888-4888-8888-888888888888', 'Bob');
+    const match = { matchId: '99999999-9999-4999-8999-999999999999', endedAt: now, players: [
+      { sessionId: alice.sessionId, gamePoints: 900, won: true, sharedWin: false, correctGuesses: 3, fastestGuesses: 1, drawings: 4 },
+      { sessionId: bob.sessionId, gamePoints: 700, won: false, sharedWin: false, correctGuesses: 2, fastestGuesses: 0, drawings: 4 },
+    ] };
+    expect(await repository.recordMatch(match)).toEqual({ recorded: true });
+    expect(await repository.recordMatch(match)).toEqual({ recorded: false });
+    const weekly = await repository.leaderboard('weekly', now);
+    expect(weekly.periodKey).toBe('2026-W34'); expect(weekly.entries.map((entry) => entry.name)).toEqual(['Alice', 'Bob']);
+    expect(weekly.entries[0]).toMatchObject({ rank: 1, matches: 1, wins: 1, correctGuesses: 3, chaosScore: 835 });
+    expect((await repository.leaderboard('monthly', now)).entries[0]?.chaosScore).toBe(835);
+    expect((await repository.leaderboard('all-time', now)).entries[0]?.matches).toBe(1);
+  });
+
+  it('uses shared ranks for equal leaderboard scores and resets period views in UTC', async () => {
+    const monday = Date.UTC(2026, 7, 17, 1); const repository = new MemoryProgressionRepository(() => monday);
+    const a = await repository.ensurePlayer('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Alpha'); const b = await repository.ensurePlayer('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Beta');
+    await repository.recordMatch({ matchId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', endedAt: monday, players: [a, b].map((player) => ({ sessionId: player.sessionId, gamePoints: 0, won: true, sharedWin: true, correctGuesses: 0, fastestGuesses: 0, drawings: 4 })) });
+    expect((await repository.leaderboard('weekly', monday)).entries.map((entry) => entry.rank)).toEqual([1, 1]);
+    expect((await repository.leaderboard('weekly', monday + 7 * 86_400_000)).entries).toEqual([]);
+    expect((await repository.leaderboard('all-time', monday + 7 * 86_400_000)).entries).toHaveLength(2);
+  });
 });
