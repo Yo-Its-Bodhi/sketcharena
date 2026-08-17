@@ -13,6 +13,7 @@
     "lint": "eslint .",
     "test": "npm run build -w @sketch-arena/protocol && npm run test -w @sketch-arena/server && npm run test -w @sketch-arena/web",
     "contract:compile": "node scripts/compile-panic-archive.mjs",
+    "contract:artifact": "node scripts/compile-panic-archive.mjs --write-artifact",
     "contract:test:live": "node scripts/test-panic-archive.mjs",
     "contract:test:ci": "node scripts/test-contract-ci.mjs",
     "ops:backup": "node scripts/backup-data.mjs",

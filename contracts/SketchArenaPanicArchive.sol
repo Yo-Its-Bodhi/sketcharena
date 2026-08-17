@@ -123,6 +123,9 @@ contract SketchArenaPanicArchive is ERC721URIStorage, ERC2981, Ownable2Step, Pau
         maxMintPrice = maxMintPrice_;
         artistRoyaltyBps = artistRoyaltyBps_;
         _collectionMetadataURI = collectionMetadataURI_;
+        // Mainnet deployments begin fail-closed. The owner must explicitly
+        // unpause after reviewing the deployed bytecode and constructor state.
+        _pause();
     }
 
     function contractURI() external view returns (string memory) {

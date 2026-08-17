@@ -33,6 +33,10 @@ describe('MintService', () => {
     expect(approval.summary).toMatch(/^Approve /); expect(decodeFunctionData({ abi: parseAbi(['function setRecipientApproved(address recipient,bool approved)']), data: approval.request.data })).toMatchObject({ functionName: 'setRecipientApproved', args: [privateKeyToAccount(userKey).address, true] });
     const allowlist = service.prepareContractAccessTransaction({ action: 'set-allowlist', enabled: true });
     expect(allowlist.summary).toContain('Require approved wallets'); expect(decodeFunctionData({ abi: parseAbi(['function setAllowlistRequired(bool required)']), data: allowlist.request.data })).toMatchObject({ functionName: 'setAllowlistRequired', args: [true] });
+    const paused = service.prepareContractAccessTransaction({ action: 'set-paused', enabled: true });
+    expect(paused.summary).toContain('Pause all'); expect(decodeFunctionData({ abi: parseAbi(['function pause()']), data: paused.request.data })).toMatchObject({ functionName: 'pause' });
+    const unpaused = service.prepareContractAccessTransaction({ action: 'set-paused', enabled: false });
+    expect(unpaused.summary).toContain('Unpause'); expect(decodeFunctionData({ abi: parseAbi(['function unpause()']), data: unpaused.request.data })).toMatchObject({ functionName: 'unpause' });
     const user = privateKeyToAccount(userKey); const challenge = await service.createChallenge(player.sessionId, user.address); const proof = await user.signMessage({ message: challenge.message });
     expect(await service.verifyWallet(player.sessionId, challenge.challengeId, user.address, proof)).toMatchObject({ address: user.address });
     const prepared = await service.prepare(player.sessionId, art.id);

@@ -65,27 +65,26 @@ const compiledToken = output.contracts['contracts/test/MockWSHIDO.sol'].MockWSHI
 const provider = new JsonRpcProvider(process.env.PANIC_ARCHIVE_RPC ?? 'http://127.0.0.1:8546');
 const signingWallet = new Wallet('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80', provider);
 const owner = new NonceManager(signingWallet);
-const ownerRpc = await provider.getSigner(0);
+const freshOwner = () => provider.getSigner(0);
 const recipient = await provider.getSigner(1);
 const recipientAddress = await recipient.getAddress();
-const expectDeploymentFailure = async (deploymentFactory, args, label) => {
+const expectDeploymentFailure = async (args, label) => {
   let reverted = false;
-  try { await deploymentFactory.deploy(...args); } catch { reverted = true; }
+  try { await new ContractFactory(compiled.abi, `0x${compiled.evm.bytecode.object}`, await provider.getSigner(0)).deploy(...args); } catch { reverted = true; }
   assert.equal(reverted, true, `${label} deployment should revert`);
 };
 const factory = new ContractFactory(compiled.abi, `0x${compiled.evm.bytecode.object}`, owner);
-const rejectionFactory = new ContractFactory(compiled.abi, `0x${compiled.evm.bytecode.object}`, ownerRpc);
 const tokenFactory = new ContractFactory(compiledToken.abi, `0x${compiledToken.evm.bytecode.object}`, owner);
 const paymentToken = await tokenFactory.deploy(); await paymentToken.waitForDeployment(); const paymentTokenAddress = await paymentToken.getAddress();
 const args = [signingWallet.address, signingWallet.address, signingWallet.address, paymentTokenAddress, 100, parseEther('1'), 'ipfs://panic-archive/collection.json', 500];
-await expectDeploymentFailure(rejectionFactory, [ZeroAddress, ...args.slice(1)], 'zero owner');
-await expectDeploymentFailure(rejectionFactory, [signingWallet.address, ZeroAddress, ...args.slice(2)], 'zero signer');
-await expectDeploymentFailure(rejectionFactory, [signingWallet.address, signingWallet.address, ZeroAddress, ...args.slice(3)], 'zero payout receiver');
-await expectDeploymentFailure(rejectionFactory, [signingWallet.address, signingWallet.address, signingWallet.address, ZeroAddress, ...args.slice(4)], 'zero payment token');
-await expectDeploymentFailure(rejectionFactory, [signingWallet.address, signingWallet.address, signingWallet.address, recipientAddress, ...args.slice(4)], 'EOA payment token');
-await expectDeploymentFailure(rejectionFactory, [...args.slice(0, 4), 0, ...args.slice(5)], 'zero supply');
-await expectDeploymentFailure(rejectionFactory, [...args.slice(0, 6), '', ...args.slice(7)], 'empty collection metadata');
-await expectDeploymentFailure(rejectionFactory, [...args.slice(0, 7), 1_001], 'royalty above cap');
+await expectDeploymentFailure([ZeroAddress, ...args.slice(1)], 'zero owner');
+await expectDeploymentFailure([signingWallet.address, ZeroAddress, ...args.slice(2)], 'zero signer');
+await expectDeploymentFailure([signingWallet.address, signingWallet.address, ZeroAddress, ...args.slice(3)], 'zero payout receiver');
+await expectDeploymentFailure([signingWallet.address, signingWallet.address, signingWallet.address, ZeroAddress, ...args.slice(4)], 'zero payment token');
+await expectDeploymentFailure([signingWallet.address, signingWallet.address, signingWallet.address, recipientAddress, ...args.slice(4)], 'EOA payment token');
+await expectDeploymentFailure([...args.slice(0, 4), 0, ...args.slice(5)], 'zero supply');
+await expectDeploymentFailure([...args.slice(0, 6), '', ...args.slice(7)], 'empty collection metadata');
+await expectDeploymentFailure([...args.slice(0, 7), 1_001], 'royalty above cap');
 const archive = await factory.deploy(...args);
 await archive.waitForDeployment();
 const contractAddress = await archive.getAddress();
@@ -118,12 +117,17 @@ const unauthorizedOwnerActions = [
   ['pause', () => archive.connect(recipient).pause()],
 ];
 for (const [label, action] of unauthorizedOwnerActions) await expectRevert(action, `unauthorized ${label}`);
-await expectRevert(() => archive.connect(ownerRpc).setMintSigner(ZeroAddress), 'zero mint signer update');
-await expectRevert(() => archive.connect(ownerRpc).setPayoutReceiver(ZeroAddress), 'zero payout receiver update');
-await expectRevert(() => archive.connect(ownerRpc).setRecipientBlocked(ZeroAddress, true), 'zero block recipient');
-await expectRevert(() => archive.connect(ownerRpc).setRecipientApproved(ZeroAddress, true), 'zero approved recipient');
-await expectRevert(() => archive.connect(ownerRpc).setCollectionMetadataURI(''), 'empty collection metadata update');
+await expectRevert(async () => archive.connect(await freshOwner()).setMintSigner(ZeroAddress), 'zero mint signer update');
+await expectRevert(async () => archive.connect(await freshOwner()).setPayoutReceiver(ZeroAddress), 'zero payout receiver update');
+await expectRevert(async () => archive.connect(await freshOwner()).setRecipientBlocked(ZeroAddress, true), 'zero block recipient');
+await expectRevert(async () => archive.connect(await freshOwner()).setRecipientApproved(ZeroAddress, true), 'zero approved recipient');
+await expectRevert(async () => archive.connect(await freshOwner()).setCollectionMetadataURI(''), 'empty collection metadata update');
 assert.equal(await archive.contractURI(), 'ipfs://panic-archive/collection.json');
+assert.equal(await archive.paused(), true, 'a new production collection must begin paused');
+await expectRevert(() => archive.connect(recipient).unpause(), 'unauthorized initial unpause');
+await (await archive.connect(await freshOwner()).unpause()).wait();
+owner.reset();
+assert.equal(await archive.paused(), false);
 
 const freeURI = 'ipfs://panic-archive/free-mint.json';
 const freeVoucher = makeVoucher(1, freeURI, 'artwork-one');
@@ -189,7 +193,7 @@ await expectRevert(() => archive.connect(recipient).redeem(expired, 'ipfs://pani
 const overCap = makeVoucher(11, 'ipfs://panic-archive/over-cap.json', 'artwork-ten', { price: parseEther('2') });
 await expectRevert(() => archive.connect(recipient).redeem(overCap, 'ipfs://panic-archive/over-cap.json', sign(overCap)), 'price above safety cap');
 const wrongRecipient = makeVoucher(12, 'ipfs://panic-archive/wrong-recipient.json', 'artwork-eleven');
-await expectRevert(() => archive.connect(ownerRpc).redeem(wrongRecipient, 'ipfs://panic-archive/wrong-recipient.json', sign(wrongRecipient)), 'wrong recipient');
+await expectRevert(async () => archive.connect(await freshOwner()).redeem(wrongRecipient, 'ipfs://panic-archive/wrong-recipient.json', sign(wrongRecipient)), 'wrong recipient');
 const emptyArtwork = makeVoucher(13, 'ipfs://panic-archive/empty-art.json', 'ignored', { artworkHash: `0x${'00'.repeat(32)}` });
 await expectRevert(() => archive.connect(recipient).redeem(emptyArtwork, 'ipfs://panic-archive/empty-art.json', sign(emptyArtwork)), 'empty artwork hash');
 const wrongDomainSignature = await signingWallet.signTypedData({ ...domain, chainId: network.chainId + 1n }, types, makeVoucher(14, 'ipfs://panic-archive/domain.json', 'artwork-twelve'));
@@ -268,6 +272,7 @@ assert.equal(await archive.totalMinted(), fuzzStartToken + BigInt(fuzzCases));
 
 const tinyArchive = await factory.deploy(signingWallet.address, signingWallet.address, signingWallet.address, paymentTokenAddress, 1, parseEther('1'), 'ipfs://panic-archive/tiny.json', 0);
 await tinyArchive.waitForDeployment();
+await (await tinyArchive.unpause()).wait();
 const tinyAddress = await tinyArchive.getAddress();
 const tinyDomain = { ...domain, verifyingContract: tinyAddress };
 const crossContractURI = 'ipfs://panic-archive/cross-contract.json';
@@ -281,7 +286,7 @@ const tinyTwo = makeVoucher(1_002, tinyTwoURI, 'tiny-artwork-two');
 await expectRevert(() => tinyArchive.connect(recipient).redeem(tinyTwo, tinyTwoURI, signingWallet.signTypedData(tinyDomain, types, tinyTwo)), 'maximum supply');
 
 await (await archive.freezeCollectionMetadata()).wait();
-await expectRevert(() => archive.connect(ownerRpc).setCollectionMetadataURI('ipfs://changed.json'), 'frozen collection metadata');
+await expectRevert(async () => archive.connect(await freshOwner()).setCollectionMetadataURI('ipfs://changed.json'), 'frozen collection metadata');
 const expectedPayoutBalance = parseEther('.1') + fuzzPaidTotal;
 assert.equal(await paymentToken.balanceOf(signingWallet.address), expectedPayoutBalance, 'WSHIDO must settle directly to the payout receiver');
 assert.equal(await paymentToken.balanceOf(contractAddress), 0n, 'archive must not retain player WSHIDO');

@@ -40,6 +40,7 @@ Updated: 2026-08-17
 - [x] Public collection-level metadata endpoint for the contract and marketplace indexer.
 - [x] Contract compile and disposable-chain adversarial suite.
 - [ ] One irreversible gate remains: deploy the reviewed collection from the approved owner wallet, then configure its address and run one free-mint canary on Shido mainnet.
+- [x] Added a two-stage Backstage deployment review using the checked-in artifact, exact approved roles and owner-wallet-only signing. The collection constructor starts paused.
 
 ## Milestone 5 — Production release
 

@@ -30,6 +30,7 @@ import { PostgresMintRepository } from './mint/PostgresMintRepository.js';
 import { PostgresProgressionRepository } from './progression/PostgresProgressionRepository.js';
 import { PostgresPromotionRepository } from './promotion/PostgresPromotionRepository.js';
 import { PostgresReportRepository } from './moderation/PostgresReportRepository.js';
+import { preparePanicArchiveDeployment } from './mint/PanicArchiveDeployment.js';
 
 const PORT = Number(process.env.PORT ?? 4100);
 const BIND_HOST = process.env.BIND_HOST ?? '127.0.0.1';
@@ -232,6 +233,7 @@ const contractAccessSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('set-blocked'), address: walletAddressSchema, enabled: z.boolean() }),
   z.object({ action: z.literal('set-approved'), address: walletAddressSchema, enabled: z.boolean() }),
   z.object({ action: z.literal('set-allowlist'), enabled: z.boolean() }),
+  z.object({ action: z.literal('set-paused'), enabled: z.boolean() }),
 ]);
 app.get('/api/rooms', (_request, response) => response.json(publicRooms()));
 app.get('/api/archive', async (request, response) => {
@@ -391,6 +393,10 @@ app.post('/api/admin/contract-access/prepare', (request, response) => {
   const principal = authorizeAdmin(request.headers.authorization, request.ip, 'admin'); if (!principal) return response.status(adminStatus()).json({ error: adminError('admin') });
   const parsed = contractAccessSchema.safeParse(request.body); if (!parsed.success) return response.status(400).json({ error: 'Contract access action is invalid' });
   try { return response.json(minting.prepareContractAccessTransaction(parsed.data)); } catch (error) { return sendMintError(response, error); }
+});
+app.get('/api/admin/contract-deployment/prepare', (request, response) => {
+  const principal = authorizeAdmin(request.headers.authorization, request.ip, 'admin'); if (!principal) return response.status(adminStatus()).json({ error: adminError('admin') });
+  try { return response.json(preparePanicArchiveDeployment(minting.config)); } catch (error) { return sendMintError(response, error); }
 });
 
 io.on('connection', (socket) => {

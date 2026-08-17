@@ -9,9 +9,9 @@ This document fixes the intended review boundary for `SketchArenaPanicArchive.so
 | Item | Pinned value |
 | --- | --- |
 | Contract | `contracts/SketchArenaPanicArchive.sol` |
-| Current source SHA-256 | `84a2d0835b44698ddb4a6bf92003722c90d1deb204bab3ce9983f61b25f166f2` |
+| Current source SHA-256 | `e5ab07960b07fc53cb09ffec57cd4661dc1c42b511441d821d9f64a846740fe1` |
 | Adversarial harness | `scripts/test-panic-archive.mjs` |
-| Current harness SHA-256 | `892d68e2ded2c3af7a9b1aec253f51a7505d7a000d1f17aca898e8525fe05252` |
+| Current harness SHA-256 | `7a73a5ea12541ba84727aa36b45b0a6a0f97dea104d441b363816d6a2e57ec69` |
 | Compiler | Solidity `0.8.26` |
 | Optimizer | enabled, 200 runs |
 | OpenZeppelin | `@openzeppelin/contracts@4.9.6` |
@@ -118,4 +118,4 @@ Mainnet addresses and economics require a separate approval after the testnet re
 5. Execute one controlled free canary mint and exercise pause plus signer rotation readiness.
 6. Open public minting only after the canary evidence is accepted by the product owner.
 
-No script in this repository deploys this contract. That boundary is intentional.
+Backstage can prepare the exact checked-in artifact and constructor arguments for the approved owner wallet. It cannot sign, cannot accept a private key, refuses a second deployment after an address is configured, and verifies a successful receipt has contract code before displaying an address. The constructor starts paused; a separate owner transaction is required to unpause after independent verification.

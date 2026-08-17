@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 
 const require = createRequire(import.meta.url);
@@ -39,4 +40,16 @@ else {
   if (deployedBytes > 24_576) throw new Error(`Deployed bytecode exceeds EIP-170: ${deployedBytes} bytes`);
   console.log(`Panic Archive contract compiled with solc ${solc.version()}`);
   console.log(`ABI entries: ${contract.abi.length}; deployed bytecode: ${deployedBytes} bytes`);
+  if (process.argv.includes('--write-artifact')) {
+    const artifactPath = resolve(process.cwd(), 'contracts', 'SketchArenaPanicArchive.artifact.json');
+    writeFileSync(artifactPath, `${JSON.stringify({
+      contractName: 'SketchArenaPanicArchive',
+      compiler: solc.version(),
+      sourceSha256: createHash('sha256').update(input.sources['contracts/SketchArenaPanicArchive.sol'].content).digest('hex'),
+      abi: contract.abi,
+      bytecode: `0x${contract.evm.bytecode.object}`,
+      deployedBytecode: `0x${contract.evm.deployedBytecode.object}`,
+    }, null, 2)}\n`);
+    console.log(`Wrote reviewed deployment artifact: ${artifactPath}`);
+  }
 }

@@ -16,6 +16,8 @@ const PANIC_ARCHIVE_ABI = parseAbi([
   'function setRecipientBlocked(address recipient,bool blocked)',
   'function setRecipientApproved(address recipient,bool approved)',
   'function setAllowlistRequired(bool required)',
+  'function pause()',
+  'function unpause()',
   'event PanicArchiveMinted(address indexed recipient,uint256 indexed tokenId,bytes32 indexed artworkHash,uint256 pricePaid,uint256 nonce,uint32 seasonId,bytes32 campaignId)',
 ]);
 const PANIC_ARCHIVE_READ_ABI = parseAbi([
@@ -80,7 +82,7 @@ export interface MintPublicStatus {
   firstMintFree: true;
 }
 interface TokenPriceQuote { tokenUsd: number; source: string; quotedAt: number; }
-export type ContractAccessAction = { action: 'set-blocked'; address: string; enabled: boolean } | { action: 'set-approved'; address: string; enabled: boolean } | { action: 'set-allowlist'; enabled: boolean };
+export type ContractAccessAction = { action: 'set-blocked'; address: string; enabled: boolean } | { action: 'set-approved'; address: string; enabled: boolean } | { action: 'set-allowlist'; enabled: boolean } | { action: 'set-paused'; enabled: boolean };
 export interface ContractAdminTransaction { chainId: number; chainName: string; nativeCurrency: MintConfiguration['nativeCurrency']; rpcUrls: string[]; blockExplorerUrl?: string; request: { to: Address; value: '0x0'; data: Hex }; summary: string; }
 
 export class MintServiceError extends Error {
@@ -290,6 +292,7 @@ export class MintService {
   prepareContractAccessTransaction(input: ContractAccessAction): ContractAdminTransaction {
     assertContractControls(this.config); let data: Hex; let summary: string;
     if (input.action === 'set-allowlist') { data = encodeFunctionData({ abi: PANIC_ARCHIVE_ABI, functionName: 'setAllowlistRequired', args: [input.enabled] }); summary = input.enabled ? 'Require approved wallets for every new mint' : 'Open mint redemption to wallets holding a valid signed voucher'; }
+    else if (input.action === 'set-paused') { data = encodeFunctionData({ abi: PANIC_ARCHIVE_ABI, functionName: input.enabled ? 'pause' : 'unpause' }); summary = input.enabled ? 'Pause all Panic Archive minting' : 'Unpause Panic Archive minting'; }
     else {
       if (!isAddress(input.address)) throw new MintServiceError('Wallet address is invalid', 400); const address = getAddress(input.address);
       if (input.action === 'set-blocked') { data = encodeFunctionData({ abi: PANIC_ARCHIVE_ABI, functionName: 'setRecipientBlocked', args: [address, input.enabled] }); summary = `${input.enabled ? 'Block' : 'Unblock'} ${address}`; }
