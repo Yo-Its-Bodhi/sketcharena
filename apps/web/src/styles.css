@@ -478,6 +478,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .round-awards small, .round-awards strong { display: block; }
 .round-awards small { font-size: 8px; letter-spacing: .1em; }
 .keep-button { width: 100%; padding: 14px; color: white; background: var(--coral); border: 3px solid var(--ink); border-radius: 12px; box-shadow: 0 5px 0 #9d291f; font-weight: 1000; }
+.keep-button:disabled { color: var(--ink); background: var(--mint); box-shadow: 0 5px 0 #267451; cursor: default; }
+.keep-confirmation { margin-top: 10px; padding: 9px 11px; color: var(--ink); background: var(--mint); border: 2px solid var(--ink); border-radius: 9px; font-size: 10px; font-weight: 900; text-align: center; }
 .text-button { margin-top: 13px; border: 0; background: none; font-weight: 900; }
 
 .afterparty .topbar > span { font-size: 10px; font-weight: 900; letter-spacing: .15em; }
@@ -485,6 +487,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .winner small { color: var(--yellow); letter-spacing: .17em; font-weight: 1000; }
 .winner h1 { margin: 5px 0; color: var(--paper); font-family: 'Archivo Black'; font-size: clamp(57px, 10vw, 142px); line-height: .9; letter-spacing: -.07em; }
 .winner > strong { color: var(--mint); }
+.winner-rule { display: block; width: fit-content; max-width: min(620px,90vw); margin: 15px auto 0; padding: 8px 12px; color: var(--paper); background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.18); border-radius: 999px; font-size: 12px; font-style: normal; font-weight: 800; }
 .match-recap { width: min(1050px, calc(100% - 32px)); margin: 30px auto 55px; display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
 .match-recap article { min-width: 0; padding: 18px; color: var(--ink); background: var(--yellow); border: 3px solid var(--ink); border-radius: 14px; box-shadow: 0 6px 0 var(--coral); transform: rotate(-.6deg); }
 .match-recap article:nth-child(2) { background: var(--mint); transform: rotate(.5deg); }
