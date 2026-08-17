@@ -24,6 +24,15 @@ describe('ProgressionRepository', () => {
     expect(resumed.rewards[0]).toMatchObject({ kind: 'mint-credit', amount: 1, reason: 'Your first Panic Archive mint is on us.', acknowledgedAt: 4321 });
   });
 
+  it('reserves Season 1 Premium exactly once for every Season 0 beta player', async () => {
+    const repository = new MemoryProgressionRepository(() => 5432);
+    const player = await repository.ensurePlayer('13131313-1313-4313-8313-131313131313', 'Founding Weirdo');
+    const resumed = await repository.ensurePlayer(player.sessionId, player.name);
+    expect(resumed.passEntitlements).toEqual(['season-1-premium']);
+    expect(resumed.battlePass).toBe('free');
+    expect(resumed.rewards.filter((reward) => reward.campaignId === 'season-0-founding-weirdos-season-1-premium')).toHaveLength(1);
+  });
+
   it('updates earned progression without duplicating achievement items', async () => {
     const repository = new MemoryProgressionRepository();
     const player = await repository.ensurePlayer('22222222-2222-4222-8222-222222222222', 'Bodhi');
@@ -53,7 +62,7 @@ describe('ProgressionRepository', () => {
     const premium = (await repository.getPlayer(player.sessionId))!;
     expect(premium.battlePass).toBe('premium');
     expect(premium.items).toEqual(expect.arrayContaining(['green-chaos-avatar', 'neon-panic-brush']));
-    expect(premium.rewards.filter((reward) => reward.campaignId?.startsWith('season-0-premium-level-'))).toHaveLength(3);
+    expect(premium.rewards.filter((reward) => reward.campaignId?.startsWith('season-0-premium-level-'))).toHaveLength(4);
     await expect(repository.equipItem(player.sessionId, 'golden-chaos-avatar')).rejects.toThrow('not unlocked');
     expect((await repository.equipItem(player.sessionId, 'green-chaos-avatar')).equipped.avatar).toBe('green-chaos-avatar');
     expect((await repository.equipItem(player.sessionId, 'neon-panic-brush')).equipped.brush).toBe('neon-panic-brush');

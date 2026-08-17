@@ -26,6 +26,7 @@ export interface PlayerProgress {
   xp: number;
   level: number;
   battlePass: 'free' | 'premium';
+  passEntitlements: string[];
   achievements: string[];
   items: string[];
   equipped: { avatar?: string; brush?: string; reaction?: string; title?: string; frame?: string };
@@ -80,10 +81,14 @@ const SEASON_LEVEL_REWARDS: Array<{ level: number; kind: 'mint-credit' | 'item' 
 ];
 const PREMIUM_LEVEL_REWARDS: Array<{ level: number; kind: 'mint-credit' | 'item'; amount: number; itemId?: string; reason: string }> = [
   { level: 1, kind: 'item', amount: 1, itemId: 'green-chaos-avatar', reason: 'Premium Panic Pass · Green Chaos avatar' },
+  { level: 2, kind: 'item', amount: 1, itemId: 'riot-marker-brush', reason: 'Premium Panic Pass Level 2 · Riot Marker brush' },
   { level: 3, kind: 'mint-credit', amount: 1, reason: 'Premium Panic Pass Level 3 · bonus free mint' },
   { level: 5, kind: 'item', amount: 1, itemId: 'neon-panic-brush', reason: 'Premium Panic Pass Level 5 · Neon Panic brush' },
   { level: 7, kind: 'item', amount: 1, itemId: 'tiny-fire-reaction', reason: 'Premium Panic Pass Level 7 · Tiny Fire reaction' },
   { level: 10, kind: 'mint-credit', amount: 2, reason: 'Premium Panic Pass Level 10 · two bonus free mints' },
+  { level: 12, kind: 'item', amount: 1, itemId: 'chaos-charcoal-brush', reason: 'Premium Panic Pass Level 12 · Chaos Charcoal brush' },
+  { level: 15, kind: 'item', amount: 1, itemId: 'velvet-rope-frame', reason: 'Premium Panic Pass Level 15 · Velvet Rope frame' },
+  { level: 18, kind: 'item', amount: 1, itemId: 'professional-disaster-title', reason: 'Premium Panic Pass Level 18 · Professional Disaster title' },
   { level: 20, kind: 'item', amount: 1, itemId: 'golden-chaos-avatar', reason: 'Premium Panic Pass Level 20 · Golden Chaos avatar' },
 ];
 export const SEASON_ITEMS = [
@@ -91,11 +96,15 @@ export const SEASON_ITEMS = [
   { id: 'green-chaos-avatar', name: 'Green Chaos', description: 'Looks worried. Probably knows the prompt.', slot: 'avatar', rarity: 'rare', previewColor: '#27ae8a' },
   { id: 'golden-chaos-avatar', name: 'Golden Chaos', description: 'Season finisher energy with questionable talent.', slot: 'avatar', rarity: 'legendary', previewColor: '#f2c94c' },
   { id: 'panic-pencil', name: 'Panic Pencil', description: 'A hot-red drawing cursor and Studio brush accent.', slot: 'brush', rarity: 'rare', previewColor: '#e54b3e' },
-  { id: 'neon-panic-brush', name: 'Neon Panic', description: 'An electric premium brush accent for the Studio.', slot: 'brush', rarity: 'epic', previewColor: '#8b5cf6' },
+  { id: 'riot-marker-brush', name: 'Riot Marker', description: 'A broad translucent premium marker that visibly stacks wet ink.', slot: 'brush', rarity: 'rare', previewColor: '#ef476f' },
+  { id: 'neon-panic-brush', name: 'Neon Panic', description: 'A bright-core premium brush with a genuine electric glow.', slot: 'brush', rarity: 'epic', previewColor: '#8b5cf6' },
+  { id: 'chaos-charcoal-brush', name: 'Chaos Charcoal', description: 'A dry, grainy premium stick with broken fibres and dust.', slot: 'brush', rarity: 'epic', previewColor: '#34302d' },
   { id: 'screaming-pencil-reaction', name: 'Screaming Pencil', description: 'An exclusive reaction for drawings that have seen things.', slot: 'reaction', rarity: 'rare', previewColor: '#ffb703', glyph: '✏️' },
   { id: 'tiny-fire-reaction', name: 'Tiny Fire', description: 'Premium portable arson for the reaction rail.', slot: 'reaction', rarity: 'epic', previewColor: '#ef476f', glyph: '🧨' },
   { id: 'beautiful-disaster-title', name: 'Beautiful Disaster', description: 'A player title displayed beneath your name.', slot: 'title', rarity: 'epic', previewColor: '#27ae8a' },
   { id: 'taped-masterpiece-frame', name: 'Taped Masterpiece', description: 'A wonky gallery frame around your Arena face.', slot: 'frame', rarity: 'epic', previewColor: '#2878ff' },
+  { id: 'velvet-rope-frame', name: 'Velvet Rope', description: 'A premium coral-and-gold frame for extremely important nonsense.', slot: 'frame', rarity: 'legendary', previewColor: '#ef476f' },
+  { id: 'professional-disaster-title', name: 'Professional Disaster', description: 'A premium title for players who fail with exceptional consistency.', slot: 'title', rarity: 'legendary', previewColor: '#ffb703' },
 ] as const;
 
 export interface ProgressionRepository {
@@ -118,7 +127,7 @@ function cleanState(value?: Partial<ProgressionState>): ProgressionState {
 
 const emptyTotals = (): CompetitiveTotals => ({ chaosScore: 0, matches: 0, wins: 0, sharedWins: 0, correctGuesses: 0, fastestGuesses: 0, drawings: 0, gamePoints: 0 });
 const emptyCompetitive = (): CompetitiveProfile => ({ allTime: emptyTotals(), season: emptyTotals(), weeks: {}, months: {} });
-function normalizePlayer(player: PlayerProgress): PlayerProgress { player.equipped ??= {}; player.competitive ??= emptyCompetitive(); player.competitive.allTime ??= emptyTotals(); player.competitive.season ??= emptyTotals(); player.competitive.weeks ??= {}; player.competitive.months ??= {}; return player; }
+function normalizePlayer(player: PlayerProgress): PlayerProgress { player.equipped ??= {}; player.passEntitlements ??= []; player.competitive ??= emptyCompetitive(); player.competitive.allTime ??= emptyTotals(); player.competitive.season ??= emptyTotals(); player.competitive.weeks ??= {}; player.competitive.months ??= {}; return player; }
 
 export function ensurePlayerInState(state: ProgressionState, sessionId: string, name: string, now: number): PlayerProgress {
   const existing = state.players.find((player) => player.sessionId === sessionId);
@@ -127,15 +136,26 @@ export function ensurePlayerInState(state: ProgressionState, sessionId: string, 
     existing.lastSeenAt = now;
     normalizePlayer(existing);
     ensureFirstMintCredit(existing, now);
+    ensureFoundingSeasonOnePass(existing, now);
     applySeasonLevelRewards(existing, now);
     return existing;
   }
   const player: PlayerProgress = {
-    sessionId, name, seasonId: 'season-0', xp: 0, level: 1, battlePass: 'free', achievements: [], items: [], equipped: {}, competitive: emptyCompetitive(), rewards: [],
+    sessionId, name, seasonId: 'season-0', xp: 0, level: 1, battlePass: 'free', passEntitlements: [], achievements: [], items: [], equipped: {}, competitive: emptyCompetitive(), rewards: [],
     firstSeenAt: now, lastSeenAt: now,
   };
   ensureFirstMintCredit(player, now);
+  ensureFoundingSeasonOnePass(player, now);
   state.players.push(player); return player;
+}
+
+function ensureFoundingSeasonOnePass(player: PlayerProgress, now: number): void {
+  const entitlement = 'season-1-premium';
+  if (!player.passEntitlements.includes(entitlement)) player.passEntitlements.push(entitlement);
+  const campaignId = 'season-0-founding-weirdos-season-1-premium';
+  if (player.rewards.some((reward) => reward.campaignId === campaignId)) return;
+  player.rewards.push({ id: randomUUID(), kind: 'battle-pass', amount: 1, itemId: entitlement,
+    reason: 'Founding Weirdo reward · your Season 1 Premium Panic Pass is free.', campaignId, grantedAt: now });
 }
 
 function ensureFirstMintCredit(player: PlayerProgress, now: number): void {
@@ -168,7 +188,11 @@ export function grantInState(state: ProgressionState, input: RewardGrantInput, n
     if (input.kind === 'xp') { player.xp += input.amount; player.level = Math.max(1, Math.floor(player.xp / 1_000) + 1); applySeasonLevelRewards(player, now); }
     if (input.kind === 'item' && input.itemId && !player.items.includes(input.itemId)) player.items.push(input.itemId);
     if (input.kind === 'achievement' && input.itemId && !player.achievements.includes(input.itemId)) player.achievements.push(input.itemId);
-    if (input.kind === 'battle-pass') { player.battlePass = 'premium'; applyPremiumLevelRewards(player, now); }
+    if (input.kind === 'battle-pass') {
+      const entitlement = input.itemId ?? 'season-0-premium';
+      if (!player.passEntitlements.includes(entitlement)) player.passEntitlements.push(entitlement);
+      if (entitlement === 'season-0-premium') { player.battlePass = 'premium'; applyPremiumLevelRewards(player, now); }
+    }
     granted += 1;
   }
   state.appliedKeys.push(input.idempotencyKey);

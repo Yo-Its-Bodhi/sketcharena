@@ -1,8 +1,14 @@
 # iSketch production audit
 
-Audit date: 2026-08-16
+Audit date: 2026-08-17
 
 Scope: current React/Vite client, authoritative Socket.IO game server, shared protocol, local artwork repository, desktop/mobile presentation, and the publicly described NFTStudio handoff boundary.
+
+## Season-pass and Studio-brush production finish
+
+The pass is now a real two-lane seasonal system rather than one row with a premium label. A single XP bar advances the worthwhile Free Panic Pass and the separate Premium Panic Pass. Premium cannot modify Chaos Score, round time, guessing points, matchmaking or leaderboard rank. All Season 0 beta accounts receive an idempotent, persistent `season-1-premium` entitlement and a clear Founding Weirdo receipt; this reserves Season 1 Premium without incorrectly upgrading the current pass.
+
+The Premium lane now has ten concrete rewards across levels 1–20. Its Studio drops are backed by the actual renderer: Riot Marker stacks translucent wet ink, Neon Panic renders a glow plus bright core, and Chaos Charcoal renders broken fibres and dust. The full free Studio library also has separate pressure graphite, tapered ink, particle airbrush, technical, watercolor, pastel, pixel and calligraphy behavior. Saved SVG exports preserve the material family with appropriate width, opacity, dashes and filters. Automated coverage asserts that every brush has a unique render profile.
 
 ## Current top-to-bottom verification pass
 

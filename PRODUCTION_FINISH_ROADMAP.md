@@ -17,12 +17,17 @@ Updated: 2026-08-17
 - [x] Save-to-Vault confirmation offers Start Fresh or Open Vault.
 - [x] Fresh artwork resets title, layers and storefront package without deleting saved work.
 - [x] Professional free toolset, formats, dark UI, 8 essential colours, 24 custom colours and 12 non-destructive layers.
+- [x] Eleven genuinely distinct brush renderers: pressure graphite, tapered ink, stacking marker, particle airbrush, fibrous charcoal, technical line, layered watercolor, grainy pastel, snapped pixels, ribbon calligraphy and bright-core neon.
+- [x] Equipped pass brushes change the real Studio renderer and export treatment—not just the button colour or item name.
 - [x] Layer add, select, rename, show/hide, solo/show-all, reorder, duplicate, lock, opacity, blend and trash controls.
 - [x] Account recovery and passkey path for durable cross-device Vault ownership.
 
 ## Milestone 3 — Season, rewards and player economy
 
 - [x] Season XP, levels, achievements, cosmetics, equipment and free/premium Panic Pass entitlement tracks.
+- [x] Call-of-Duty-style dual lanes share one XP bar: Free remains worthwhile, Premium adds only cosmetics and Mint Credits, never competitive power.
+- [x] Every Season 0 beta account permanently reserves a free Season 1 Premium Panic Pass as a Founding Weirdo reward.
+- [x] Season 0 Premium contains a full 10-reward lane, including working Riot Marker, Neon Panic and Chaos Charcoal Studio brushes.
 - [x] First Panic Archive mint is an immediate welcome entitlement, not a fake random loot claim.
 - [x] Reward Inbox is notification/history; rewards are usable as soon as they are earned.
 - [x] Individual grants, audited global thank-you drops, free-mint credits, percentage discounts and capped promo codes.

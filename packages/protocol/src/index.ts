@@ -119,6 +119,7 @@ export interface PlayerProgress {
   xp: number;
   level: number;
   battlePass: 'free' | 'premium';
+  passEntitlements: string[];
   achievements: string[];
   items: string[];
   equipped: { avatar?: string; brush?: string; reaction?: string; title?: string; frame?: string };

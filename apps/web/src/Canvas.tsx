@@ -16,13 +16,28 @@ interface PreviewSurface { canvas: HTMLCanvasElement; pixelWidth: number; pixelH
 const COMMON_COLORS = ['#000000', '#ffffff', '#ef4444', '#f59e0b', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6'];
 const MAX_GESTURE_POINTS = 7_000;
 const BRUSHES: Array<{ id: BrushStyle; label: string; detail: string }> = [
-  { id: 'pencil', label: 'Pencil', detail: 'Crisp sketch' }, { id: 'ink', label: 'Inker', detail: 'Clean + bold' },
-  { id: 'marker', label: 'Marker', detail: 'Translucent' }, { id: 'airbrush', label: 'Airbrush', detail: 'Soft build-up' },
-  { id: 'charcoal', label: 'Charcoal', detail: 'Dry texture' }, { id: 'technical', label: 'Technical', detail: 'Precision line' },
-  { id: 'watercolor', label: 'Watercolor', detail: 'Soft wash' }, { id: 'pastel', label: 'Pastel', detail: 'Powder texture' },
-  { id: 'pixel', label: 'Pixel', detail: 'Hard square' }, { id: 'calligraphy', label: 'Calligraphy', detail: 'Elegant edge' },
-  { id: 'neon', label: 'Neon', detail: 'Electric glow' },
+  { id: 'pencil', label: 'Pencil', detail: 'Pressure graphite' }, { id: 'ink', label: 'Inker', detail: 'Tapered wet line' },
+  { id: 'marker', label: 'Marker', detail: 'Broad ink stacking' }, { id: 'airbrush', label: 'Airbrush', detail: 'Soft particle spray' },
+  { id: 'charcoal', label: 'Charcoal', detail: 'Fibres + loose dust' }, { id: 'technical', label: 'Technical', detail: 'Constant precision' },
+  { id: 'watercolor', label: 'Watercolor', detail: 'Layered wet wash' }, { id: 'pastel', label: 'Pastel', detail: 'Powder + grain' },
+  { id: 'pixel', label: 'Pixel', detail: 'Snapped square trail' }, { id: 'calligraphy', label: 'Calligraphy', detail: 'Angled ribbon nib' },
+  { id: 'neon', label: 'Neon', detail: 'Glow + bright core' },
 ];
+const COSMETIC_BRUSHES: Record<string, { brush: BrushStyle; color: string }> = {
+  'panic-pencil': { brush: 'pencil', color: '#e54b3e' },
+  'riot-marker-brush': { brush: 'marker', color: '#ef476f' },
+  'neon-panic-brush': { brush: 'neon', color: '#8b5cf6' },
+  'chaos-charcoal-brush': { brush: 'charcoal', color: '#34302d' },
+};
+
+export const BRUSH_RENDER_PROFILES: Record<BrushStyle, { width: number; alpha: number; texture: string }> = {
+  pencil: { width: .7, alpha: .82, texture: 'graphite' }, ink: { width: .95, alpha: 1, texture: 'tapered' },
+  marker: { width: 1.55, alpha: .32, texture: 'overprint' }, airbrush: { width: 2.5, alpha: .2, texture: 'spray' },
+  charcoal: { width: 1.15, alpha: .7, texture: 'fibres' }, technical: { width: .42, alpha: 1, texture: 'constant' },
+  watercolor: { width: 1.85, alpha: .2, texture: 'wash' }, pastel: { width: 1.35, alpha: .58, texture: 'powder' },
+  pixel: { width: 1, alpha: 1, texture: 'squares' }, calligraphy: { width: 1.5, alpha: .95, texture: 'ribbon' },
+  neon: { width: .86, alpha: 1, texture: 'glow-core' },
+};
 
 function loadCustomColors(): string[] {
   try { const value = JSON.parse(localStorage.getItem('sketch-arena-custom-colors') ?? '[]'); return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && /^#[0-9a-f]{6}$/i.test(item)).slice(0, 24) : []; }
@@ -33,9 +48,9 @@ export function Canvas({ strokes, active, expert = false, layers, activeLayerId,
   const canvasRef = useRef<HTMLCanvasElement>(null); const boardRef = useRef<HTMLDivElement>(null);
   const current = useRef<Stroke | null>(null); const lastPreview = useRef(0); const moveStart = useRef<{ x: number; y: number } | null>(null); const moveEnd = useRef<{ x: number; y: number } | null>(null);
   const layerRenderCache = useRef<Map<string, LayerRenderCache>>(new Map()); const previewSurface = useRef<PreviewSurface | null>(null);
-  const equippedBrush = expert ? localStorage.getItem('sketch-equipped-brush') : null;
-  const [tool, setTool] = useState<CanvasTool>('pencil'); const [brush, setBrush] = useState<BrushStyle>(() => equippedBrush === 'neon-panic-brush' ? 'neon' : 'pencil');
-  const [color, setColor] = useState(() => equippedBrush === 'neon-panic-brush' ? '#8b5cf6' : equippedBrush === 'panic-pencil' ? '#e54b3e' : '#171514'); const [size, setSize] = useState(6);
+  const equippedBrush = expert ? localStorage.getItem('sketch-equipped-brush') : null; const equippedPreset = equippedBrush ? COSMETIC_BRUSHES[equippedBrush] : undefined;
+  const [tool, setTool] = useState<CanvasTool>('pencil'); const [brush, setBrush] = useState<BrushStyle>(() => equippedPreset?.brush ?? 'pencil');
+  const [color, setColor] = useState(() => equippedPreset?.color ?? '#171514'); const [size, setSize] = useState(6);
   const [opacity, setOpacity] = useState(100); const [smoothing, setSmoothing] = useState(45);
   const [customColors, setCustomColors] = useState<string[]>(loadCustomColors);
   const [showGrid, setShowGrid] = useState(false); const [symmetry, setSymmetry] = useState<'none' | 'vertical' | 'horizontal'>('none');
@@ -169,21 +184,74 @@ function drawStroke(context: CanvasRenderingContext2D, stroke: Stroke, width: nu
   if (!stroke.points.length) return; context.save();
   if (stroke.tool === 'eraser') context.globalCompositeOperation = layered ? 'destination-out' : 'source-over';
   if (stroke.tool === 'fill') { context.globalAlpha = stroke.opacity ?? 1; context.fillStyle = stroke.color; context.fillRect(0, 0, width, height); context.restore(); return; }
-  const brush = stroke.brush ?? 'pencil'; const eraseColor = '#f4f0e8'; context.lineCap = brush === 'pixel' || brush === 'calligraphy' ? 'butt' : 'round'; context.lineJoin = brush === 'pixel' ? 'miter' : 'round';
-  const widthScale = brush === 'pencil' ? .72 : brush === 'technical' ? .45 : brush === 'calligraphy' ? 1.45 : 1;
-  context.lineWidth = stroke.size * ratio * widthScale; context.strokeStyle = stroke.tool === 'eraser' ? eraseColor : stroke.color; context.fillStyle = stroke.tool === 'eraser' ? eraseColor : stroke.color;
-  const brushAlpha = brush === 'marker' ? .38 : brush === 'airbrush' ? .22 : brush === 'watercolor' ? .3 : brush === 'pastel' ? .64 : brush === 'charcoal' ? .72 : 1;
-  context.globalAlpha = stroke.tool === 'eraser' ? 1 : (stroke.opacity ?? 1) * brushAlpha;
-  if (brush === 'airbrush' || brush === 'watercolor' || brush === 'neon') { context.shadowColor = stroke.color; context.shadowBlur = stroke.size * ratio * (brush === 'neon' ? 1.25 : .8); }
-  if (brush === 'charcoal' || brush === 'pastel') context.setLineDash([Math.max(1, stroke.size * ratio * .32), Math.max(1, stroke.size * ratio * .13)]);
-  const first = stroke.points[0]!; const last = stroke.points.at(-1)!;
-  if (stroke.shape === 'rectangle') { context.strokeRect(first.x * width, first.y * height, (last.x - first.x) * width, (last.y - first.y) * height); context.restore(); return; }
-  if (stroke.shape === 'ellipse') { const x = (first.x + last.x) * width / 2; const y = (first.y + last.y) * height / 2; context.beginPath(); context.ellipse(x, y, Math.abs(last.x - first.x) * width / 2, Math.abs(last.y - first.y) * height / 2, 0, 0, Math.PI * 2); context.stroke(); context.restore(); return; }
-  if (stroke.shape === 'triangle') { context.beginPath(); context.moveTo((first.x + last.x) * width / 2, first.y * height); context.lineTo(last.x * width, last.y * height); context.lineTo(first.x * width, last.y * height); context.closePath(); context.stroke(); context.restore(); return; }
-  if (stroke.shape === 'arrow') { const x1 = first.x * width; const y1 = first.y * height; const x2 = last.x * width; const y2 = last.y * height; const angle = Math.atan2(y2 - y1, x2 - x1); const head = Math.max(12 * ratio, stroke.size * ratio * 3); context.beginPath(); context.moveTo(x1, y1); context.lineTo(x2, y2); context.moveTo(x2, y2); context.lineTo(x2 - head * Math.cos(angle - Math.PI / 6), y2 - head * Math.sin(angle - Math.PI / 6)); context.moveTo(x2, y2); context.lineTo(x2 - head * Math.cos(angle + Math.PI / 6), y2 - head * Math.sin(angle + Math.PI / 6)); context.stroke(); context.restore(); return; }
-  if (stroke.shape === 'line') { context.beginPath(); context.moveTo(first.x * width, first.y * height); context.lineTo(last.x * width, last.y * height); context.stroke(); context.restore(); return; }
-  if (stroke.points.length === 1) { context.beginPath(); context.arc(first.x * width, first.y * height, stroke.size * ratio / 2, 0, Math.PI * 2); context.fill(); context.restore(); return; }
-  context.beginPath(); context.moveTo(first.x * width, first.y * height); const smooth = stroke.smoothing ?? 0;
-  if (smooth > .08 && stroke.points.length > 2) { for (let index = 1; index < stroke.points.length - 1; index += 1) { const point = stroke.points[index]!; const next = stroke.points[index + 1]!; context.quadraticCurveTo(point.x * width, point.y * height, (point.x + next.x) * width / 2, (point.y + next.y) * height / 2); } context.lineTo(last.x * width, last.y * height); }
-  else for (const point of stroke.points.slice(1)) context.lineTo(point.x * width, point.y * height); context.stroke(); context.restore();
+  const brush = stroke.tool === 'eraser' ? 'ink' : stroke.brush ?? 'pencil'; const profile = BRUSH_RENDER_PROFILES[brush]; const color = stroke.tool === 'eraser' ? '#f4f0e8' : stroke.color;
+  const baseSize = stroke.size * ratio; const pressure = stroke.points.reduce((sum, point) => sum + (point.pressure ?? .5), 0) / stroke.points.length;
+  context.strokeStyle = color; context.fillStyle = color; context.lineJoin = brush === 'pixel' ? 'miter' : 'round'; context.lineCap = brush === 'marker' || brush === 'pixel' || brush === 'calligraphy' ? 'butt' : 'round';
+  context.lineWidth = baseSize * profile.width * (brush === 'technical' ? 1 : .72 + pressure * .56); context.globalAlpha = stroke.tool === 'eraser' ? 1 : (stroke.opacity ?? 1) * profile.alpha;
+  const first = stroke.points[0]!;
+  if (stroke.shape && stroke.shape !== 'freehand') { drawShape(context, stroke, width, height, ratio); context.restore(); return; }
+  if (stroke.points.length === 1) { drawBrushDot(context, brush, first.x * width, first.y * height, baseSize, color); context.restore(); return; }
+
+  if (brush === 'pixel') {
+    const step = Math.max(2 * ratio, baseSize * .7); const points = sampleStrokePoints(stroke.points, Math.min(900, stroke.points.length));
+    for (const point of points) { const x = Math.round(point.x * width / step) * step; const y = Math.round(point.y * height / step) * step; context.fillRect(x - step / 2, y - step / 2, step, step); }
+  } else if (brush === 'airbrush') {
+    context.shadowColor = color; context.shadowBlur = baseSize * 1.6; context.lineWidth = baseSize * 1.8; traceStroke(context, stroke, width, height); context.stroke();
+    context.shadowBlur = baseSize * .8; const points = sampleStrokePoints(stroke.points, Math.min(700, stroke.points.length));
+    points.forEach((point, index) => { for (let dust = 0; dust < 4; dust += 1) { const angle = noise(index, dust) * Math.PI * 2; const radius = noise(index + 31, dust + 7) * baseSize * 1.7; const dot = Math.max(.45 * ratio, noise(index + 91, dust + 2) * baseSize * .18); context.beginPath(); context.arc(point.x * width + Math.cos(angle) * radius, point.y * height + Math.sin(angle) * radius, dot, 0, Math.PI * 2); context.fill(); } });
+  } else if (brush === 'charcoal') {
+    context.setLineDash([Math.max(1, baseSize * .42), Math.max(1, baseSize * .16)]); context.lineWidth = baseSize * 1.05;
+    for (const offset of [-.18, 0, .21]) { context.beginPath(); traceStroke(context, stroke, width, height, offset * baseSize, Math.sin(offset * 23) * baseSize * .16); context.stroke(); }
+    context.setLineDash([]); scatterTexture(context, stroke, width, height, baseSize, 1.35, 3);
+  } else if (brush === 'pastel') {
+    context.lineWidth = baseSize * 1.25; context.setLineDash([Math.max(1,baseSize * .3),Math.max(1,baseSize * .08)]); traceStroke(context, stroke, width, height); context.stroke(); context.setLineDash([]); scatterTexture(context, stroke, width, height, baseSize, 1.05, 5);
+  } else if (brush === 'watercolor') {
+    context.lineCap = 'round'; context.shadowColor = color; context.shadowBlur = baseSize * .35;
+    for (const [scale, x, y] of [[2.05,-.18,.08],[1.65,.16,-.13],[1.2,0,.16]] as const) { context.lineWidth = baseSize * scale; context.beginPath(); traceStroke(context, stroke, width, height, x * baseSize, y * baseSize); context.stroke(); }
+  } else if (brush === 'calligraphy') {
+    context.lineCap = 'butt'; context.lineJoin = 'bevel'; context.lineWidth = baseSize * (1.05 + pressure); traceStroke(context, stroke, width, height); context.stroke();
+    context.globalAlpha *= .52; context.lineWidth = Math.max(ratio, baseSize * .22); context.strokeStyle = '#ffffff'; context.beginPath(); traceStroke(context, stroke, width, height, baseSize * .28, -baseSize * .28); context.stroke();
+  } else if (brush === 'neon') {
+    context.globalAlpha *= .72; context.shadowColor = color; context.shadowBlur = baseSize * 2.4; context.lineWidth = baseSize * 1.45; traceStroke(context, stroke, width, height); context.stroke();
+    context.globalAlpha = stroke.opacity ?? 1; context.shadowBlur = baseSize * .7; context.lineWidth = Math.max(1.2 * ratio, baseSize * .42); context.strokeStyle = '#ffffff'; context.beginPath(); traceStroke(context, stroke, width, height); context.stroke();
+  } else if (brush === 'marker') {
+    context.globalCompositeOperation = stroke.tool === 'eraser' ? context.globalCompositeOperation : 'multiply'; context.lineWidth = baseSize * 1.55; traceStroke(context, stroke, width, height); context.stroke();
+    context.globalAlpha *= .55; context.lineWidth = baseSize * 1.12; context.beginPath(); traceStroke(context, stroke, width, height, baseSize * .11, 0); context.stroke();
+  } else if (brush === 'pencil') {
+    context.lineWidth = baseSize * (.42 + pressure * .52); traceStroke(context, stroke, width, height); context.stroke();
+    context.globalAlpha *= .28; context.lineWidth = Math.max(.55 * ratio, baseSize * .18); for (const offset of [-.22,.25]) { context.beginPath(); traceStroke(context, stroke, width, height, offset * baseSize, offset * baseSize * .35); context.stroke(); }
+  } else {
+    context.lineWidth = baseSize * (brush === 'technical' ? .42 : .72 + pressure * .58); traceStroke(context, stroke, width, height); context.stroke();
+    if (brush === 'ink') { context.beginPath(); context.arc(first.x * width, first.y * height, context.lineWidth * .34, 0, Math.PI * 2); context.fill(); }
+  }
+  context.restore();
 }
+
+function traceStroke(context: CanvasRenderingContext2D, stroke: Stroke, width: number, height: number, offsetX = 0, offsetY = 0): void {
+  const first = stroke.points[0]!; const last = stroke.points.at(-1)!; context.beginPath(); context.moveTo(first.x * width + offsetX, first.y * height + offsetY);
+  if ((stroke.smoothing ?? 0) > .08 && stroke.points.length > 2) { for (let index = 1; index < stroke.points.length - 1; index += 1) { const point = stroke.points[index]!; const next = stroke.points[index + 1]!; context.quadraticCurveTo(point.x * width + offsetX, point.y * height + offsetY, (point.x + next.x) * width / 2 + offsetX, (point.y + next.y) * height / 2 + offsetY); } context.lineTo(last.x * width + offsetX, last.y * height + offsetY); }
+  else for (const point of stroke.points.slice(1)) context.lineTo(point.x * width + offsetX, point.y * height + offsetY);
+}
+
+function drawShape(context: CanvasRenderingContext2D, stroke: Stroke, width: number, height: number, ratio: number): void {
+  const first = stroke.points[0]!; const last = stroke.points.at(-1)!;
+  if (stroke.shape === 'rectangle') { context.strokeRect(first.x * width, first.y * height, (last.x - first.x) * width, (last.y - first.y) * height); return; }
+  if (stroke.shape === 'ellipse') { context.beginPath(); context.ellipse((first.x + last.x) * width / 2, (first.y + last.y) * height / 2, Math.abs(last.x - first.x) * width / 2, Math.abs(last.y - first.y) * height / 2, 0, 0, Math.PI * 2); context.stroke(); return; }
+  if (stroke.shape === 'triangle') { context.beginPath(); context.moveTo((first.x + last.x) * width / 2, first.y * height); context.lineTo(last.x * width, last.y * height); context.lineTo(first.x * width, last.y * height); context.closePath(); context.stroke(); return; }
+  const x1 = first.x * width; const y1 = first.y * height; const x2 = last.x * width; const y2 = last.y * height; context.beginPath(); context.moveTo(x1, y1); context.lineTo(x2, y2);
+  if (stroke.shape === 'arrow') { const angle = Math.atan2(y2 - y1, x2 - x1); const head = Math.max(12 * ratio, stroke.size * ratio * 3); context.moveTo(x2, y2); context.lineTo(x2 - head * Math.cos(angle - Math.PI / 6), y2 - head * Math.sin(angle - Math.PI / 6)); context.moveTo(x2, y2); context.lineTo(x2 - head * Math.cos(angle + Math.PI / 6), y2 - head * Math.sin(angle + Math.PI / 6)); }
+  context.stroke();
+}
+
+function drawBrushDot(context: CanvasRenderingContext2D, brush: BrushStyle, x: number, y: number, size: number, color: string): void {
+  if (brush === 'pixel') { context.fillRect(x - size / 2, y - size / 2, size, size); return; }
+  if (brush === 'neon') { context.shadowColor = color; context.shadowBlur = size * 2; context.beginPath(); context.arc(x, y, size * .62, 0, Math.PI * 2); context.fill(); context.fillStyle = '#fff'; context.beginPath(); context.arc(x, y, size * .2, 0, Math.PI * 2); context.fill(); return; }
+  context.beginPath(); context.arc(x, y, size * BRUSH_RENDER_PROFILES[brush].width / 2, 0, Math.PI * 2); context.fill();
+}
+
+function scatterTexture(context: CanvasRenderingContext2D, stroke: Stroke, width: number, height: number, size: number, spread: number, density: number): void {
+  const points = sampleStrokePoints(stroke.points, Math.min(650, stroke.points.length));
+  points.forEach((point, index) => { for (let grain = 0; grain < density; grain += 1) { const angle = noise(index, grain) * Math.PI * 2; const radius = noise(index + 17, grain + 13) * size * spread; const dot = Math.max(.35, noise(index + 61, grain + 5) * size * .11); context.beginPath(); context.arc(point.x * width + Math.cos(angle) * radius, point.y * height + Math.sin(angle) * radius, dot, 0, Math.PI * 2); context.fill(); } });
+}
+
+function noise(value: number, salt: number): number { const raw = Math.sin(value * 12.9898 + salt * 78.233) * 43_758.5453; return raw - Math.floor(raw); }
