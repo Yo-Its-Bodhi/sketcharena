@@ -17,13 +17,17 @@ export async function createBackup({ sources, destination, release = 'unknown', 
   const files = [];
   for (const sourceValue of sources) {
     const source = resolve(sourceValue);
-    const data = await readFile(source);
+    let data;
+    try { data = await readFile(source); }
+    catch (error) { if (error?.code === 'ENOENT') continue; throw error; }
     JSON.parse(data.toString('utf8'));
     const name = basename(source);
     const target = resolve(backupDirectory, name);
     await writeFile(target, data, { flag: 'wx', mode: 0o600 });
     files.push({ name, source, bytes: data.byteLength, sha256: hash(data) });
   }
+
+  if (!files.length) throw new Error('No existing Sketch Arena data files were found');
 
   const manifest = { format: 'SKETCH-ARENA-BACKUP-V1', createdAt: now.toISOString(), release, files };
   await writeFile(resolve(backupDirectory, 'manifest.json'), JSON.stringify(manifest, null, 2), { flag: 'wx', mode: 0o600 });

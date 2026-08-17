@@ -36,3 +36,16 @@ test('backs up account, artwork, progression and mint JSON only when PostgreSQL 
   assert.ok(postgresSources.every((source) => !source.endsWith('mint-lifecycle.json')));
   assert.ok(postgresSources.every((source) => !source.endsWith('progression.json')));
 });
+
+test('skips absent optional legacy files but refuses an empty backup', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sketch-arena-partial-backup-test-'));
+  try {
+    const existing = join(root, 'artworks.json');
+    await writeFile(existing, JSON.stringify([{ id: 'survivor' }]));
+    const result = await createBackup({ sources: [existing, join(root, 'progression.json')], destination: join(root, 'backups') });
+    assert.deepEqual(result.manifest.files.map((file) => file.name), ['artworks.json']);
+    await assert.rejects(() => createBackup({ sources: [join(root, 'missing.json')], destination: join(root, 'empty') }), /No existing Sketch Arena data files/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
