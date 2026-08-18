@@ -869,8 +869,12 @@ function Vault({ back, studio }: { back: () => void; studio: () => void }) {
 }
 
 function VaultRecovery({ close }: { close: () => void }) {
-  const [revealed, setRevealed] = useState(false); const [restoreKey, setRestoreKey] = useState(''); const [armed, setArmed] = useState(false); const [message, setMessage] = useState('');
-  const [account, setAccount] = useState<PlayerAccountInfo | null>(null); const [securing, setSecuring] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+  const [restoreKey, setRestoreKey] = useState('');
+  const [armed, setArmed] = useState(false);
+  const [message, setMessage] = useState('');
+  const [account, setAccount] = useState<PlayerAccountInfo | null>(null);
+  const [securing, setSecuring] = useState(false);
   const [devices, setDevices] = useState<DeviceSessionInfo[]>([]);
   const dialogRef = useDialogFocus<HTMLDivElement>(true, close);
   useEffect(() => { void Promise.all([accountStatus(), listDeviceSessions().catch(() => [])]).then(([current, sessions]) => { setAccount(current); setDevices(sessions); }); }, []);
@@ -882,7 +886,35 @@ function VaultRecovery({ close }: { close: () => void }) {
   const secure = async () => { setSecuring(true); setMessage(''); try { const secured = await secureAccountWithPasskey('Sketch Arena passkey'); setAccount(secured); setMessage('Passkey added. This Vault can now follow you to another device.'); } catch (reason) { setMessage(reason instanceof Error ? reason.message : 'Passkey setup failed'); } finally { setSecuring(false); } };
   const revokeDevice = async (device: DeviceSessionInfo) => { try { await revokeDeviceSession(device.id); setDevices((current) => current.filter((item) => item.id !== device.id)); setMessage(`${device.label} has been signed out.`); } catch (reason) { setMessage(reason instanceof Error ? reason.message : 'Could not sign that device out'); } };
   const restore = async () => { if (!validRestore) return setMessage('That recovery key is not valid.'); if (!armed) { setArmed(true); setMessage('One more click will replace this browser’s current Vault identity. Back it up first if you need it.'); return; } await fetch('/api/account/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined); sessionCredential = parsedRestoreKey; localStorage.setItem('arena-credential', sessionCredential); localStorage.removeItem('arena-session'); location.reload(); };
-  return <motion.div className="recovery-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={(event) => event.target === event.currentTarget && close()}><motion.div ref={dialogRef} tabIndex={-1} className="recovery-sheet" role="dialog" aria-modal="true" aria-labelledby="recovery-title" initial={{ y: 35, scale: .95 }} animate={{ y: 0, scale: 1 }} exit={{ y: 20, opacity: 0 }}><button className="setup-close" onClick={close} aria-label="Close Vault recovery">×</button><div className="recovery-weirdo"><ChaosFace variant={1}/><span>KEEP THIS ONE SAFE.</span></div><small>PRIVATE PLAYER IDENTITY</small><h2 id="recovery-title">YOUR VAULT<br/>RECOVERY KEY.</h2><p>Your artwork, rewards, Battle Pass and wallet binding are attached to this account. A passkey is the easiest safe way to bring it to another device.</p><section className={`passkey-security ${account?.secured ? 'is-secured' : ''}`}><b>{account?.secured ? '✓ ACCOUNT SECURED' : 'SECURE THIS ACCOUNT'}</b><p>{account?.secured ? `${account.passkeyCount ?? 1} passkey${(account.passkeyCount ?? 1) === 1 ? '' : 's'} connected. Your private recovery key still works as an emergency backup.` : 'Use Face ID, Touch ID, Windows Hello or your phone. No password and no wallet pop-up.'}</p><button disabled={securing} onClick={() => void secure()}>{securing ? 'ASKING YOUR DEVICE…' : account?.secured ? '＋ ADD ANOTHER PASSKEY' : 'ADD A PASSKEY →'}</button>{devices.length > 0 && <div className="device-sessions"><small>SIGNED-IN DEVICES</small>{devices.map((device) => <div key={device.id}><span><b>{device.label}</b><small>{device.current ? 'THIS DEVICE' : `SEEN ${new Date(device.lastSeenAt).toLocaleDateString()}`}</small></span>{!device.current && <button onClick={() => void revokeDevice(device)}>SIGN OUT</button>}</div>)}</div>}</section><section className="recovery-backup"><b>EMERGENCY RECOVERY KEY</b><code>{revealed ? recoveryCode : `SKETCH-VAULT-V1-${'•'.repeat(32)}`}</code><div><button onClick={() => setRevealed((value) => !value)}>{revealed ? 'HIDE KEY' : 'REVEAL KEY'}</button><button onClick={() => void copy()}>COPY KEY</button><button onClick={download}>DOWNLOAD FILE</button></div></section><section className="recovery-restore"><b>RESTORE WITH A RECOVERY KEY</b><p>This signs this browser out of its current Vault, then opens the recovered one. It does not delete either account.</p><textarea value={restoreKey} onChange={(event) => { setRestoreKey(event.target.value); setArmed(false); setMessage(''); }} placeholder="Paste SKETCH-VAULT-V1-…"/><button className={armed ? 'danger' : ''} disabled={!validRestore} onClick={() => void restore()}>{armed ? 'CONFIRM: OPEN THAT VAULT' : 'CHECK RECOVERY KEY →'}</button></section>{message && <div className="recovery-message" role="status">{message}</div>}<small className="recovery-warning">NEVER SHARE THIS KEY IN CHAT. SKETCH ARENA STAFF WILL NEVER ASK FOR IT.</small></motion.div></motion.div>;
+  return <motion.div className="recovery-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={(event) => event.target === event.currentTarget && close()}>
+    <motion.div ref={dialogRef} tabIndex={-1} className="recovery-sheet" role="dialog" aria-modal="true" aria-labelledby="recovery-title" initial={{ y: 35, scale: .95 }} animate={{ y: 0, scale: 1 }} exit={{ y: 20, opacity: 0 }}>
+      <button className="setup-close" onClick={close} aria-label="Close Vault recovery">×</button>
+      <div className="recovery-weirdo"><ChaosFace variant={1}/><span>KEEP THIS ONE SAFE.</span></div>
+      <small>PRIVATE PLAYER IDENTITY</small>
+      <h2 id="recovery-title">YOUR VAULT<br/>RECOVERY KEY.</h2>
+      <p>Your artwork, rewards, Battle Pass and wallet binding are attached to this account. A passkey is the easiest safe way to bring it to another device.</p>
+      <section className={`passkey-security ${account?.secured ? 'is-secured' : ''}`}>
+        <b>{account?.secured ? '✓ ACCOUNT SECURED' : 'SECURE THIS ACCOUNT'}</b>
+        <p>{account?.secured ? `${account.passkeyCount ?? 1} passkey${(account.passkeyCount ?? 1) === 1 ? '' : 's'} connected. Your private recovery key still works as an emergency backup.` : 'Use Face ID, Touch ID, Windows Hello or your phone. No password and no wallet pop-up.'}</p>
+        <button disabled={securing} onClick={() => void secure()}>{securing ? 'ASKING YOUR DEVICE…' : account?.secured ? '＋ ADD ANOTHER PASSKEY' : 'ADD A PASSKEY →'}</button>
+        {devices.length > 0 && <div className="device-sessions"><small>SIGNED-IN DEVICES</small>{devices.map((device) => <div key={device.id}><span><b>{device.label}</b><small>{device.current ? 'THIS DEVICE' : `SEEN ${new Date(device.lastSeenAt).toLocaleDateString()}`}</small></span>{!device.current && <button onClick={() => void revokeDevice(device)}>SIGN OUT</button>}</div>)}</div>}
+      </section>
+      <section className="recovery-backup">
+        <b>EMERGENCY RECOVERY KEY</b>
+        <code>{revealed ? recoveryCode : `SKETCH-VAULT-V1-${'•'.repeat(32)}`}</code>
+        <div><button onClick={() => setRevealed((value) => !value)}>{revealed ? 'HIDE KEY' : 'REVEAL KEY'}</button><button onClick={() => void copy()}>COPY KEY</button><button onClick={download}>DOWNLOAD FILE</button></div>
+        <p className="recovery-limit"><b>NO SECRET STAFF BACKDOOR.</b>If every passkey and this recovery key are lost, the account cannot be recovered. A name, wallet or NFT is not enough.</p>
+      </section>
+      <section className="recovery-restore">
+        <b>RESTORE WITH A RECOVERY KEY</b>
+        <p>This signs this browser out of its current Vault, then opens the recovered one. It does not delete either account.</p>
+        <textarea value={restoreKey} onChange={(event) => { setRestoreKey(event.target.value); setArmed(false); setMessage(''); }} placeholder="Paste SKETCH-VAULT-V1-…"/>
+        <button className={armed ? 'danger' : ''} disabled={!validRestore} onClick={() => void restore()}>{armed ? 'CONFIRM: OPEN THAT VAULT' : 'CHECK RECOVERY KEY →'}</button>
+      </section>
+      {message && <div className="recovery-message" role="status">{message}</div>}
+      <small className="recovery-warning">NEVER SHARE THIS KEY IN CHAT. SKETCH ARENA STAFF WILL NEVER ASK FOR IT.</small>
+    </motion.div>
+  </motion.div>;
 }
 
 function PanicArchive({ back }: { back: () => void }) {

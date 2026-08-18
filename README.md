@@ -5,6 +5,8 @@ A server-authoritative social drawing game with public/private rooms, live strok
 Public-room safety includes host removal with room-level re-entry prevention and a private player-report flow. Reports resolve server-authoritative room identities, are rate-limited and deduplicated, and enter a protected Backstage queue where named operators record review decisions without exposing the report to the room.
 
 The current requirement-by-requirement release decision and external NFT handoff are tracked in [`RELEASE_READINESS.md`](./RELEASE_READINESS.md).
+
+Player and support responsibilities for passkeys, device sessions and emergency Vault recovery are defined in [`ACCOUNT_RECOVERY_POLICY.md`](./ACCOUNT_RECOVERY_POLICY.md).
 The contract review package and unresolved deployment parameters are tracked in [`PANIC_ARCHIVE_AUDIT_HANDOFF.md`](./PANIC_ARCHIVE_AUDIT_HANDOFF.md).
 The fail-closed USD Premium Panic Pass sale design and remaining provider evidence are tracked in [`BATTLE_PASS_COMMERCE.md`](./BATTLE_PASS_COMMERCE.md).
 
