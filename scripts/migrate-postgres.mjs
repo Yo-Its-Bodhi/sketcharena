@@ -15,7 +15,10 @@ export async function loadMigrations(directoryValue) {
   return Promise.all(names.map(async (name) => {
     const sql = await readFile(resolve(directory, name), 'utf8');
     if (/^\s*(begin|commit|rollback)\s*;/im.test(sql)) throw new Error(`${name} contains transaction control; the migration runner owns the transaction`);
-    return { name, sql, checksum: createHash('sha256').update(sql).digest('hex') };
+    const canonicalSql = sql.replace(/\r\n/g, '\n');
+    const checksum = createHash('sha256').update(canonicalSql).digest('hex');
+    const windowsChecksum = createHash('sha256').update(canonicalSql.replace(/\n/g, '\r\n')).digest('hex');
+    return { name, sql, checksum, compatibleChecksums: [...new Set([checksum, windowsChecksum])] };
   }));
 }
 
@@ -35,7 +38,8 @@ export async function migrate(connectionString, directory = resolve(process.cwd(
     for (const migration of migrations) {
       const existing = await client.query('select checksum from sketch_arena_schema_migrations where name=$1', [migration.name]);
       if (existing.rows[0]) {
-        if (existing.rows[0].checksum !== migration.checksum) throw new Error(`Applied migration ${migration.name} has a different checksum`);
+        if (!migration.compatibleChecksums.includes(existing.rows[0].checksum)) throw new Error(`Applied migration ${migration.name} has a different checksum`);
+        if (existing.rows[0].checksum !== migration.checksum) await client.query('update sketch_arena_schema_migrations set checksum=$2 where name=$1', [migration.name, migration.checksum]);
         continue;
       }
       await client.query(migration.sql);
