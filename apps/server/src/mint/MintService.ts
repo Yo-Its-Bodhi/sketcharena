@@ -125,6 +125,12 @@ function positiveInteger(value: string | undefined): number | undefined {
   const parsed = Number(value); return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function savedPng(value: string | undefined): Buffer | null {
+  if (!value?.startsWith('data:image/png;base64,')) return null;
+  const bytes = Buffer.from(value.slice('data:image/png;base64,'.length), 'base64');
+  return bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? bytes : null;
+}
+
 function signerPrivateKey(environment: NodeJS.ProcessEnv): Hex | undefined {
   let candidate = environment.PANIC_ARCHIVE_SIGNER_PRIVATE_KEY?.trim();
   const file = environment.PANIC_ARCHIVE_SIGNER_PRIVATE_KEY_FILE?.trim();
@@ -321,8 +327,8 @@ export class MintService {
     const liveQuote = credit ? undefined : await quoteWshido(this.config, this.fetcher);
     const standardPrice = liveQuote ? usdCentsToTokenUnits(this.config.mintUsdCents, liveQuote.tokenUsd, 18) : 0n;
     const price = credit ? 0n : discount ? standardPrice * BigInt(10_000 - discount.discountBps) / 10_000n : standardPrice;
-    const svg = renderArtworkSvg(art); const artworkHash = keccak256(toBytes(svg));
-    const mediaCid = await this.pin(svg, `${safeFileName(art.title)}.svg`, 'image/svg+xml'); const mediaURI = `ipfs://${mediaCid}`;
+    const png = savedPng(art.previewUrl); const svg = png ? null : renderArtworkSvg(art); const artworkBytes = png ?? toBytes(svg!); const artworkHash = keccak256(artworkBytes);
+    const mediaCid = await this.pin(artworkBytes, `${safeFileName(art.title)}.${png ? 'png' : 'svg'}`, png ? 'image/png' : 'image/svg+xml'); const mediaURI = `ipfs://${mediaCid}`;
     const metadata = this.metadata(art, player, mediaURI, artworkHash); const metadataCid = await this.pin(JSON.stringify(metadata, null, 2), `${safeFileName(art.title)}-metadata.json`, 'application/json');
     const tokenURI = `ipfs://${metadataCid}`; const tokenURIHash = keccak256(toBytes(tokenURI));
     const nonce = BigInt(`0x${randomBytes(32).toString('hex')}`); const deadline = BigInt(Math.floor((now + this.config.voucherLifetimeMs) / 1_000));
@@ -377,8 +383,8 @@ export class MintService {
 
   private async fail(record: MintRecord, error: string): Promise<MintRecord> { const failed = { ...record, status: 'failed' as const, error, updatedAt: this.clock() }; return this.repository.saveMint(failed); }
 
-  private async pin(content: string, filename: string, contentType: string): Promise<string> {
-    assertConfigured(this.config); const form = new FormData(); form.append('file', new Blob([content], { type: contentType }), filename);
+  private async pin(content: string | Uint8Array, filename: string, contentType: string): Promise<string> {
+    assertConfigured(this.config); const part = typeof content === 'string' ? content : content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength) as ArrayBuffer; const form = new FormData(); form.append('file', new Blob([part], { type: contentType }), filename);
     const response = await this.fetcher(`${this.config.ipfsApiUrl}/api/v0/add?pin=true&cid-version=1`, { method: 'POST', headers: this.config.ipfsApiToken ? { authorization: `Bearer ${this.config.ipfsApiToken}` } : undefined, body: form, signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new MintServiceError('Permanent artwork storage is temporarily unavailable', 503);
     const line = (await response.text()).trim().split('\n').filter(Boolean).at(-1); let payload: { Hash?: string };

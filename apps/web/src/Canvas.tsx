@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { BrushStyle, DrawTool, Stroke, StrokeShape } from '@sketch-arena/protocol';
 import { sampleStrokePoints, splitStrokeForTransport } from './strokeTransport';
 
@@ -16,6 +16,7 @@ interface Props {
 type CanvasTool = DrawTool | 'eyedropper' | 'move' | 'line' | 'rectangle' | 'ellipse' | 'arrow' | 'triangle';
 interface LayerRenderCache { canvas: HTMLCanvasElement; strokes: Stroke[]; pixelWidth: number; pixelHeight: number; ratio: number; }
 interface PreviewSurface { canvas: HTMLCanvasElement; pixelWidth: number; pixelHeight: number; }
+export interface CanvasHandle { pngDataUrl: () => string | null; }
 const COMMON_COLORS = ['#000000', '#ffffff', '#ef4444', '#f59e0b', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6'];
 const MAX_GESTURE_POINTS = 7_000;
 const BRUSHES: Array<{ id: BrushStyle; label: string; detail: string }> = [
@@ -42,12 +43,21 @@ export const BRUSH_RENDER_PROFILES: Record<BrushStyle, { width: number; alpha: n
   neon: { width: .86, alpha: 1, texture: 'glow-core' },
 };
 
+export function savedStrokeLayers(strokes: Stroke[]): CanvasLayer[] | undefined {
+  if (!strokes.some((stroke) => stroke.layerId)) return undefined;
+  return strokes.reduce<CanvasLayer[]>((items, stroke) => {
+    const id = stroke.layerId ?? '__flat__'; let layer = items.find((item) => item.id === id);
+    if (!layer) { layer = { id, name: id, strokes: [], visible: true, opacity: 1, locked: false, blendMode: stroke.blendMode ?? 'normal' }; items.push(layer); }
+    layer.strokes.push(stroke); return items;
+  }, []);
+}
+
 function loadCustomColors(): string[] {
   try { const value = JSON.parse(localStorage.getItem('sketch-arena-custom-colors') ?? '[]'); return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && /^#[0-9a-f]{6}$/i.test(item)).slice(0, 24) : []; }
   catch { return []; }
 }
 
-export function Canvas({ strokes, active, expert = false, layers, activeLayerId, width = 2400, height = 2400, onStroke, onPreview, onClear, onUndo, activeLayerLocked = false, onLayerTranslate, transportPointLimit, viewport = { zoom: 1, rotation: 0, panX: 0, panY: 0 }, onViewportChange, panMode = false, expertPanelCollapsed = false, onToggleExpertPanel }: Props) {
+export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas({ strokes, active, expert = false, layers, activeLayerId, width = 2400, height = 2400, onStroke, onPreview, onClear, onUndo, activeLayerLocked = false, onLayerTranslate, transportPointLimit, viewport = { zoom: 1, rotation: 0, panX: 0, panY: 0 }, onViewportChange, panMode = false, expertPanelCollapsed = false, onToggleExpertPanel }, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null); const boardRef = useRef<HTMLDivElement>(null);
   const current = useRef<Stroke | null>(null); const lastPreview = useRef(0); const moveStart = useRef<{ x: number; y: number } | null>(null); const moveEnd = useRef<{ x: number; y: number } | null>(null);
   const spaceHeld = useRef(false); const panDrag = useRef<{ pointerId: number; clientX: number; clientY: number; viewport: CanvasViewport } | null>(null);
@@ -59,6 +69,7 @@ export function Canvas({ strokes, active, expert = false, layers, activeLayerId,
   const [opacity, setOpacity] = useState(100); const [smoothing, setSmoothing] = useState(45);
   const [customColors, setCustomColors] = useState<string[]>(loadCustomColors);
   const [showGrid, setShowGrid] = useState(false); const [symmetry, setSymmetry] = useState<'none' | 'vertical' | 'horizontal'>('none');
+  useImperativeHandle(ref, () => ({ pngDataUrl: () => canvasRef.current?.toDataURL('image/png') ?? null }), []);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current; const board = boardRef.current; if (!canvas || !board) return;
@@ -67,10 +78,12 @@ export function Canvas({ strokes, active, expert = false, layers, activeLayerId,
     const pixelWidth = Math.max(1, Math.floor(board.clientWidth * ratio)); const pixelHeight = Math.max(1, Math.floor(board.clientHeight * ratio));
     if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) { canvas.width = pixelWidth; canvas.height = pixelHeight; }
     context.globalAlpha = 1; context.globalCompositeOperation = 'source-over'; context.fillStyle = '#f4f0e8'; context.fillRect(0, 0, pixelWidth, pixelHeight);
-    if (layers) {
-      const retainedLayerIds = new Set(layers.map((layer) => layer.id));
+    const savedLayers = !layers ? savedStrokeLayers(strokes) : undefined;
+    const displayLayers = layers ?? savedLayers;
+    if (displayLayers) {
+      const retainedLayerIds = new Set(displayLayers.map((layer) => layer.id));
       for (const id of layerRenderCache.current.keys()) if (!retainedLayerIds.has(id)) layerRenderCache.current.delete(id);
-      for (const layer of layers) {
+      for (const layer of displayLayers) {
         if (!layer.visible) continue;
         let cached = layerRenderCache.current.get(layer.id);
         if (!cached || cached.strokes !== layer.strokes || cached.pixelWidth !== pixelWidth || cached.pixelHeight !== pixelHeight || cached.ratio !== ratio) {
@@ -204,7 +217,7 @@ export function Canvas({ strokes, active, expert = false, layers, activeLayerId,
     <div className={`canvas-board ${showGrid ? 'show-grid' : ''}`} ref={boardRef} style={expert ? { aspectRatio: `${width} / ${height}`, transform: `translate(${viewport.panX}px, ${viewport.panY}px) rotate(${viewport.rotation}deg) scale(${viewport.zoom})` } : undefined}><canvas ref={canvasRef} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} aria-label={active ? 'Drawing canvas' : 'Live drawing'} />{showGrid && <div className="canvas-grid" aria-hidden="true"/>}{symmetry !== 'none' && <div className={`symmetry-guide ${symmetry}`} aria-hidden="true"/>}{activeLayerLocked && <div className="canvas-lock-badge">▣ LAYER LOCKED</div>}{expert && <div className="canvas-dimensions" aria-hidden="true">{width} × {height}</div>}</div>
     {active && !expert && <div className="canvas-controls"><div className="swatches">{COMMON_COLORS.map((value) => <button aria-label={`Use ${value}`} className={color.toLowerCase() === value ? 'selected' : ''} style={{ background: value }} onClick={() => { setColor(value); setTool('pencil'); }} key={value}/>)}</div><label>Stroke <input type="range" min="2" max="18" value={size} onChange={(event) => setSize(Number(event.target.value))}/><b>{size}</b></label></div>}
   </div>;
-}
+});
 
 export function screenToCanvasCoordinates(clientX: number, clientY: number, centerX: number, centerY: number, boardWidth: number, boardHeight: number, viewport: CanvasViewport): { x: number; y: number } {
   const dx = clientX - centerX; const dy = clientY - centerY; const radians = -viewport.rotation * Math.PI / 180;

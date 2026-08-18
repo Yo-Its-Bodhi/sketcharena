@@ -146,13 +146,17 @@ const strokeSchema: z.ZodType<Stroke> = z.object({
   size: z.number().min(1).max(160), points: z.array(z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), pressure: z.number().min(0).max(1).optional() })).min(1).max(GAME.maxPointsPerStroke),
   at: z.number().nonnegative(), brush: z.enum(['pencil', 'ink', 'marker', 'airbrush', 'charcoal', 'technical', 'watercolor', 'pastel', 'pixel', 'calligraphy', 'neon']).optional(),
   shape: z.enum(['freehand', 'line', 'rectangle', 'ellipse', 'arrow', 'triangle']).optional(), opacity: z.number().min(.01).max(1).optional(), smoothing: z.number().min(0).max(1).optional(),
+  layerId: z.string().min(1).max(64).optional(), blendMode: z.enum(['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten']).optional(),
 });
 const artworkSchema = z.object({
   id: z.string().uuid().optional(), ownerSessionId: z.string().uuid().optional(), origin: z.enum(['arena', 'studio']),
   status: z.enum(['draft', 'gallery', 'mint-ready']).optional(), title: z.string().trim().min(1).max(80),
   description: z.string().max(500).optional(), canvasRatio: z.enum(['square', 'portrait', 'landscape']),
   width: z.number().int().min(256).max(8000), height: z.number().int().min(256).max(8000),
-  strokes: z.array(strokeSchema).max(GAME.maxStrokes), sourceRoundId: z.string().uuid().optional(),
+  strokes: z.array(strokeSchema).max(GAME.maxStrokes), previewUrl: z.string().max(16_000_000).refine((value) => {
+    if (!value.startsWith('data:image/png;base64,')) return false;
+    try { const bytes = Buffer.from(value.slice('data:image/png;base64,'.length), 'base64'); return bytes.length <= 12_000_000 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])); } catch { return false; }
+  }, 'Artwork preview must be a valid PNG').optional(), sourceRoundId: z.string().uuid().optional(),
 });
 
 const health = () => ({ ...operations.snapshot(rooms.size, io.engine.clientsCount), release: RELEASE_SHA });

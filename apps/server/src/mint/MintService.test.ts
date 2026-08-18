@@ -10,13 +10,14 @@ const userKey = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b786
 const signerKey = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as Hex;
 const contract = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
 const paymentToken = '0x8cbaffd9b658997e7bf87e98febf6ea6917166f7' as const;
+const onePixelPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 describe('MintService', () => {
   it('verifies real wallet ownership and prepares a valid free EIP-712 voucher', async () => {
     const artwork = new MemoryArtworkRepository(); const progression = new MemoryProgressionRepository(() => 1_000); const mints = new MemoryMintRepository();
     const player = await progression.ensurePlayer('11111111-1111-4111-8111-111111111111', 'Dru');
     const art = await artwork.save({ ownerSessionId: player.sessionId, origin: 'studio', status: 'mint-ready', title: 'Angry spaghetti', canvasRatio: 'square', width: 1200, height: 1200,
-      strokes: [{ id: 'mark', tool: 'pencil', color: '#171514', size: 4, points: [{ x: .1, y: .1 }, { x: .9, y: .9 }], at: 1 }] });
+      strokes: [{ id: 'mark', tool: 'pencil', color: '#171514', size: 4, points: [{ x: .1, y: .1 }, { x: .9, y: .9 }], at: 1 }], previewUrl: onePixelPng });
     let pin = 0; const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => String(input).startsWith('http://price')
       ? new Response(JSON.stringify({ price_usd: 1 }), { status: 200 })
       : new Response(JSON.stringify({ Hash: `bafy-test-${++pin}` }), { status: 200 }));
@@ -42,6 +43,9 @@ describe('MintService', () => {
     const prepared = await service.prepare(player.sessionId, art.id);
     expect(prepared).toMatchObject({ status: 'prepared', walletAddress: user.address, usesMintCredit: true, tokenURI: 'ipfs://bafy-test-2' });
     expect(prepared.voucher.price).toBe('0'); expect(fetcher).toHaveBeenCalledTimes(2);
+    const mediaFile = (fetcher.mock.calls[0]?.[1]?.body as FormData).get('file') as File;
+    expect(mediaFile.name).toBe('angry-spaghetti.png'); expect(mediaFile.type).toBe('image/png');
+    expect([...new Uint8Array(await mediaFile.arrayBuffer()).slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
     const metadataFile = (fetcher.mock.calls[1]?.[1]?.body as FormData).get('file') as File;
     const metadata = JSON.parse(await metadataFile.text()) as Record<string, unknown>;
     expect(metadata).toMatchObject({ external_url: 'http://localhost:5173/archive', image: 'ipfs://bafy-test-1' });

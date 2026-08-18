@@ -5,7 +5,7 @@ import type { ArtworkDocument, ArtworkOrigin, ArtworkStatus, CanvasRatio, PanicA
 
 export function toPanicArchiveItem(record: ArtworkDocument): PanicArchiveItem {
   if (record.status !== 'minted' || record.mint?.status !== 'confirmed' || !record.mint.tokenId || !record.mint.contractAddress || !record.mint.transactionHash || !record.mint.tokenURI) throw new Error('Artwork is not a confirmed Panic Archive mint');
-  return { id: record.id, title: record.title, description: record.description, origin: record.origin, canvasRatio: record.canvasRatio, width: record.width, height: record.height, strokes: record.strokes, createdAt: record.createdAt, mintedAt: record.updatedAt, seasonId: 0, seasonName: 'The First Mess', tokenId: record.mint.tokenId, contractAddress: record.mint.contractAddress, transactionHash: record.mint.transactionHash, tokenURI: record.mint.tokenURI, marketplaceUrl: record.mint.marketplaceUrl };
+  return { id: record.id, title: record.title, description: record.description, origin: record.origin, canvasRatio: record.canvasRatio, width: record.width, height: record.height, strokes: record.strokes, previewUrl: record.previewUrl, createdAt: record.createdAt, mintedAt: record.updatedAt, seasonId: 0, seasonName: 'The First Mess', tokenId: record.mint.tokenId, contractAddress: record.mint.contractAddress, transactionHash: record.mint.transactionHash, tokenURI: record.mint.tokenURI, marketplaceUrl: record.mint.marketplaceUrl };
 }
 
 export interface SaveArtworkInput {
@@ -19,6 +19,7 @@ export interface SaveArtworkInput {
   width: number;
   height: number;
   strokes: Stroke[];
+  previewUrl?: string;
   sourceRoundId?: string;
 }
 
@@ -47,7 +48,7 @@ export class MemoryArtworkRepository implements ArtworkRepository {
       id: previous?.id ?? input.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin,
       status: input.status ?? previous?.status ?? 'draft', title: input.title.trim().slice(0, 80),
       description: (input.description ?? '').trim().slice(0, 500), canvasRatio: input.canvasRatio,
-      width: input.width, height: input.height, strokes: input.strokes, sourceRoundId: input.sourceRoundId,
+      width: input.width, height: input.height, strokes: input.strokes, previewUrl: input.previewUrl ?? previous?.previewUrl, sourceRoundId: input.sourceRoundId,
       createdAt: previous?.createdAt ?? now, updatedAt: now, mint: previous?.mint,
     };
     this.records.set(document.id, document);
@@ -86,7 +87,7 @@ export class FileArtworkRepository implements ArtworkRepository {
       id: previous?.id ?? input.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin,
       status: input.status ?? previous?.status ?? 'draft', title: input.title.trim().slice(0, 80),
       description: (input.description ?? '').trim().slice(0, 500), canvasRatio: input.canvasRatio,
-      width: input.width, height: input.height, strokes: input.strokes, sourceRoundId: input.sourceRoundId,
+      width: input.width, height: input.height, strokes: input.strokes, previewUrl: input.previewUrl ?? previous?.previewUrl, sourceRoundId: input.sourceRoundId,
       createdAt: previous?.createdAt ?? now, updatedAt: now, mint: previous?.mint,
     };
     records.set(document.id, document); await this.persist(records); return document;

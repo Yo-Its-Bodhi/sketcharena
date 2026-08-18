@@ -3,6 +3,7 @@ export type CanvasRatio = 'square' | 'portrait' | 'landscape';
 export type DrawTool = 'pencil' | 'eraser' | 'fill';
 export type BrushStyle = 'pencil' | 'ink' | 'marker' | 'airbrush' | 'charcoal' | 'technical' | 'watercolor' | 'pastel' | 'pixel' | 'calligraphy' | 'neon';
 export type StrokeShape = 'freehand' | 'line' | 'rectangle' | 'ellipse' | 'arrow' | 'triangle';
+export type ArtworkBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten';
 
 export interface Point { x: number; y: number; pressure?: number; }
 
@@ -17,7 +18,11 @@ export interface Stroke {
   shape?: StrokeShape;
   opacity?: number;
   smoothing?: number;
+  layerId?: string;
+  blendMode?: ArtworkBlendMode;
 }
+
+export { renderArtworkDocumentSvg, renderArtworkSvg } from './renderArtworkSvg.js';
 
 export interface PlayerView {
   id: string;
@@ -242,6 +247,7 @@ export interface PanicArchiveItem {
   width: number;
   height: number;
   strokes: Stroke[];
+  previewUrl?: string;
   createdAt: number;
   mintedAt: number;
   seasonId: number;
