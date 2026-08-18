@@ -341,6 +341,14 @@ app.post('/api/artworks', async (request, response) => {
   try { return response.status(201).json(await artwork.save({ ...parsed.data, ownerSessionId })); }
   catch (error) { return response.status(400).json({ error: error instanceof Error ? error.message : 'Could not save artwork' }); }
 });
+app.delete('/api/artworks/:artworkId', async (request, response) => {
+  const ownerSessionId = await playerIdFromRequest(request); if (!ownerSessionId) return response.status(401).json({ error: 'Vault authentication required' });
+  const artworkId = z.string().uuid().safeParse(request.params.artworkId); if (!artworkId.success) return response.status(400).json({ error: 'Artwork ID is invalid' });
+  const record = await artwork.get(artworkId.data);
+  if (!record || record.ownerSessionId !== ownerSessionId) return response.status(404).json({ error: 'Artwork not found in your Vault' });
+  if (record.mint?.status === 'prepared' || record.mint?.status === 'submitted') return response.status(409).json({ error: 'This artwork has a mint in progress. Wait for it to confirm or expire before deleting the server copy.' });
+  return await artwork.deleteOwned(artworkId.data, ownerSessionId) ? response.status(204).send() : response.status(404).json({ error: 'Artwork not found in your Vault' });
+});
 app.post('/api/artworks/:artworkId/mint/prepare', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request); if (!ownerSessionId) return response.status(401).json({ error: 'Vault authentication required' });
   const artworkId = z.string().uuid().safeParse(request.params.artworkId); if (!artworkId.success) return response.status(400).json({ error: 'Artwork ID is invalid' });

@@ -36,6 +36,10 @@ export class PostgresArtworkRepository implements ArtworkRepository {
     const result = await this.pool.query(`select * from artworks where status='minted' and mint->>'status'='confirmed' and coalesce(mint->>'tokenId','')<>'' and coalesce(mint->>'contractAddress','')<>'' and ($2::text is null or lower(mint->>'contractAddress')=lower($2)) and coalesce(mint->>'transactionHash','')<>'' and coalesce(mint->>'tokenURI','')<>'' order by updated_at desc limit $1`, [Math.max(1, Math.min(500, limit)), contractAddress ?? null]);
     return result.rows.map(fromRow);
   }
+  async deleteOwned(id: string, ownerSessionId: string): Promise<boolean> {
+    const result = await this.pool.query('delete from artworks where id=$1 and owner_session_id=$2 returning id', [id, ownerSessionId]);
+    return Boolean(result.rows[0]);
+  }
   async updateMint(id: string, ownerSessionId: string, mint: NonNullable<ArtworkDocument['mint']>, status: ArtworkStatus): Promise<ArtworkDocument> {
     const result = await this.pool.query('update artworks set mint=coalesce(mint,\'{}\'::jsonb) || $3::jsonb,status=$4,updated_at=$5 where id=$1 and owner_session_id=$2 returning *', [id, ownerSessionId, JSON.stringify(mint), status, new Date()]);
     if (result.rows[0]) return fromRow(result.rows[0]);

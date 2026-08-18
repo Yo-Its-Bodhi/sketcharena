@@ -71,4 +71,16 @@ describe('ArtworkRepository', () => {
     expect((await repository.listMinted(100, '0x3333333333333333333333333333333333333333')).map((item) => item.id)).toEqual([active.id]);
     expect((await repository.listMinted(100, '0x3333333333333333333333333333333333333333')).some((item) => item.id === retired.id)).toBe(false);
   });
+
+  it('permanently deletes only artwork owned by the requesting Vault', async () => {
+    const repository = new MemoryArtworkRepository();
+    const ownerSessionId = '11111111-1111-4111-8111-111111111111';
+    const item = await repository.save({ ownerSessionId, origin: 'studio', status: 'mint-ready', title: 'Delete me', canvasRatio: 'square', width: 1200, height: 1200, strokes: [] });
+
+    expect(await repository.deleteOwned(item.id, '22222222-2222-4222-8222-222222222222')).toBe(false);
+    expect(await repository.get(item.id)).not.toBeNull();
+    expect(await repository.deleteOwned(item.id, ownerSessionId)).toBe(true);
+    expect(await repository.get(item.id)).toBeNull();
+    expect(await repository.deleteOwned(item.id, ownerSessionId)).toBe(false);
+  });
 });

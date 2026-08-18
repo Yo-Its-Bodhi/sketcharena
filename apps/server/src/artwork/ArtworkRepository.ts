@@ -28,6 +28,7 @@ export interface ArtworkRepository {
   get(id: string): Promise<ArtworkDocument | null>;
   listByOwner(ownerSessionId: string): Promise<ArtworkDocument[]>;
   listMinted(limit?: number, contractAddress?: string): Promise<ArtworkDocument[]>;
+  deleteOwned(id: string, ownerSessionId: string): Promise<boolean>;
   updateMint(id: string, ownerSessionId: string, mint: NonNullable<ArtworkDocument['mint']>, status: ArtworkDocument['status']): Promise<ArtworkDocument>;
 }
 
@@ -62,6 +63,10 @@ export class MemoryArtworkRepository implements ArtworkRepository {
   async listMinted(limit = 100, contractAddress?: string): Promise<ArtworkDocument[]> {
     const activeContract = contractAddress?.toLowerCase();
     return [...this.records.values()].filter((record) => record.status === 'minted' && record.mint?.status === 'confirmed' && record.mint.tokenId && record.mint.contractAddress && (!activeContract || record.mint.contractAddress.toLowerCase() === activeContract) && record.mint.transactionHash && record.mint.tokenURI).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, Math.max(1, Math.min(500, limit)));
+  }
+  async deleteOwned(id: string, ownerSessionId: string): Promise<boolean> {
+    const record = this.records.get(id); if (!record || record.ownerSessionId !== ownerSessionId) return false;
+    return this.records.delete(id);
   }
   async updateMint(id: string, ownerSessionId: string, mint: NonNullable<ArtworkDocument['mint']>, status: ArtworkDocument['status']): Promise<ArtworkDocument> {
     const record = this.records.get(id); if (!record) throw new Error('Artwork not found'); if (record.ownerSessionId !== ownerSessionId) throw new Error('Artwork owner mismatch');
@@ -100,6 +105,10 @@ export class FileArtworkRepository implements ArtworkRepository {
   async listMinted(limit = 100, contractAddress?: string): Promise<ArtworkDocument[]> {
     const activeContract = contractAddress?.toLowerCase();
     return [...(await this.load()).values()].filter((record) => record.status === 'minted' && record.mint?.status === 'confirmed' && record.mint.tokenId && record.mint.contractAddress && (!activeContract || record.mint.contractAddress.toLowerCase() === activeContract) && record.mint.transactionHash && record.mint.tokenURI).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, Math.max(1, Math.min(500, limit)));
+  }
+  async deleteOwned(id: string, ownerSessionId: string): Promise<boolean> {
+    const records = await this.load(); const record = records.get(id); if (!record || record.ownerSessionId !== ownerSessionId) return false;
+    records.delete(id); await this.persist(records); return true;
   }
   async updateMint(id: string, ownerSessionId: string, mint: NonNullable<ArtworkDocument['mint']>, status: ArtworkDocument['status']): Promise<ArtworkDocument> {
     const records = await this.load(); const record = records.get(id); if (!record) throw new Error('Artwork not found'); if (record.ownerSessionId !== ownerSessionId) throw new Error('Artwork owner mismatch');
