@@ -82,6 +82,17 @@ describe('Socket.IO authoritative transport lifecycle', () => {
     expect(logs.join('')).toContain('"event":"server.ready"');
   });
 
+  it('reserves a larger request budget for detailed Vault artwork only', async () => {
+    const body = JSON.stringify({ padding: 'x'.repeat(300_000) });
+    const [artworkResponse, ordinaryResponse] = await Promise.all([
+      fetch(`${origin}/api/artworks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }),
+      fetch(`${origin}/api/promotions/redeem`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }),
+    ]);
+    expect(artworkResponse.status).toBe(401);
+    expect(ordinaryResponse.status).toBe(413);
+    expect(await ordinaryResponse.json()).toMatchObject({ error: 'Request is too large' });
+  });
+
   it('migrates a legacy Vault into a revocable cookie session used by HTTP and live play', async () => {
     const credential = 'c'.repeat(64);
     const migrated = await fetch(`${origin}/api/account/migrate`, { method: 'POST', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Cookie Player', deviceLabel: 'Integration browser' }) });

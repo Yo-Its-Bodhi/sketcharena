@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import cors from 'cors';
-import express from 'express';
+import express, { type ErrorRequestHandler } from 'express';
 import helmet from 'helmet';
 import { Server } from 'socket.io';
 import { z } from 'zod';
@@ -48,7 +48,14 @@ app.disable('x-powered-by');
 app.set('trust proxy', process.env.TRUST_PROXY?.trim() || 'loopback');
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
 app.use(cors({ origin: WEB_ORIGINS, credentials: true }));
-app.use(express.json({ limit: '256kb' }));
+const standardJson = express.json({ limit: '256kb' });
+const artworkJson = express.json({ limit: '4mb' });
+app.use((request, response, next) => (request.method === 'POST' && request.path === '/api/artworks' ? artworkJson : standardJson)(request, response, next));
+const jsonErrorHandler: ErrorRequestHandler = (error, request, response, next) => {
+  if (error && typeof error === 'object' && 'type' in error && error.type === 'entity.too.large') return response.status(413).json({ error: request.path === '/api/artworks' ? 'Artwork is too detailed for one Vault save (4 MB maximum)' : 'Request is too large' });
+  next(error);
+};
+app.use(jsonErrorHandler);
 app.use((request, response, next) => {
   const requestId = randomUUID(); const requestStarted = performance.now();
   response.setHeader('x-request-id', requestId);
