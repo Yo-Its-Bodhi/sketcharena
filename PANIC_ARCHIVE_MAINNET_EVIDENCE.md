@@ -52,6 +52,8 @@ The first confirmed mint was a **paid** canary, not a free canary. It must not b
 - Indexed slug: `onchain-80e81de12b1412b74475c9354d092091da4ea334`.
 - Collection URL: `https://nftstudio.bodhix.io/collections/onchain-80e81de12b1412b74475c9354d092091da4ea334`.
 - Indexed token ID format: `onchain-80e81de12b1412b74475c9354d092091da4ea334-{tokenId}`.
+- PANIC #1 metadata is publicly retrievable from the configured NFTStudio IPFS gateway and identifies the creator as `Bodhi`, Season 0, Solo Studio and the 2400 × 2400 canvas.
+- The metadata's referenced PNG is independently retrievable from the same gateway (`763,700` bytes at verification time).
 
 ## Reproduce the contract and canary verification
 

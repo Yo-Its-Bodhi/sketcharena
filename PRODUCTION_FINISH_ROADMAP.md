@@ -24,11 +24,12 @@ Updated: 2026-08-17
 
 ## Milestone 3 — Season, rewards and player economy
 
-- [x] Season XP, levels, achievements, cosmetics, equipment and free/premium Panic Pass entitlement tracks.
-- [x] Call-of-Duty-style dual lanes share one XP bar: Free remains worthwhile, Premium adds only cosmetics and Mint Credits, never competitive power.
+- [x] Season XP, levels, achievements, cosmetics, equipment and a useful free Season 0 beta track; the future premium engine remains internal until Season 1.
+- [x] Future Call-of-Duty-style dual lanes share one XP bar: Free remains worthwhile, Premium adds only cosmetics and Mint Credits, never competitive power.
 - [x] Every Season 0 beta account permanently reserves a free Season 1 Premium Panic Pass as a Founding Weirdo reward.
 - [x] A repeat-safe PostgreSQL migration reserves that entitlement for existing offline beta accounts; runtime provisioning covers every new Season 0 account.
-- [x] Season 0 Premium contains a full 10-reward lane, including working Riot Marker, Neon Panic and Chaos Charcoal Studio brushes.
+- [x] The unreleased premium catalog contains a full 10-reward lane, including working Riot Marker, Neon Panic and Chaos Charcoal Studio brushes, but none is exposed during the free Season 0 beta.
+- [x] Backstage and its API cannot grant a Season 0 premium pass; the public account payload also hides future premium entitlements, rewards and items.
 - [x] First Panic Archive mint is an immediate welcome entitlement, not a fake random loot claim.
 - [x] Reward Inbox is notification/history; rewards are usable as soon as they are earned.
 - [x] Individual grants, audited global thank-you drops, free-mint credits, percentage discounts and capped promo codes.
@@ -39,9 +40,9 @@ Updated: 2026-08-17
 - [x] Badges/achievements plus usable avatars, brushes, reactions, player titles and profile frames.
 - [x] Weekly prize schedule (badges + XP) and monthly prize schedule (badges + Mint Credits), with a Backstage preview and explicit admin confirmation.
 - [x] Idempotent match receipts and prize campaign keys prevent replayed match events or repeated admin clicks from duplicating rewards.
-- [ ] Paid premium Panic Pass checkout remains a later commerce milestone; no price/provider has been approved.
+- [ ] Paid Season 1 Premium Panic Pass checkout remains a later commerce milestone; no price/provider has been approved.
 
-The Panic Pass is the seasonal progression track. Players earn XP through complete matches and unlock visible, usable identity rewards and occasional Mint Credits. Premium adds a parallel cosmetic/reward lane but never improves score, drawing tools, guessing power or leaderboard position.
+The Panic Pass is the seasonal progression track. Season 0 is a single free beta track. Players earn XP through complete matches and unlock visible, usable identity rewards and occasional Mint Credits. Season 1 may add a parallel Premium cosmetic/reward lane, but it will never improve score, drawing tools, guessing power or leaderboard position.
 
 ## Milestone 4 — Panic Archive minting
 
