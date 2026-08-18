@@ -67,6 +67,11 @@ export interface MintConfiguration {
   publicOrigin: string;
 }
 
+export function buildMarketplaceTokenUrl(template: string | undefined, contractAddress: Address | undefined, tokenId: string | undefined): string | undefined {
+  if (!template || !contractAddress || !tokenId) return undefined;
+  return template.replace('{contract}', contractAddress).replace('{tokenId}', tokenId);
+}
+
 export interface MintPublicStatus {
   enabled: boolean;
   contractControlsEnabled: boolean;
@@ -395,7 +400,7 @@ export class MintService {
     if (!mintEvent || mintEvent.pricePaid.toString() !== submitted.voucher.price || mintEvent.seasonId !== submitted.voucher.seasonId || mintEvent.campaignId.toLowerCase() !== submitted.voucher.campaignId.toLowerCase()) throw new MintServiceError('Confirmed transaction did not emit the expected Panic Archive mint', 409);
     if (submitted.creditRewardId) await this.progression.consumeMintCredit(sessionId, submitted.creditRewardId, `mint:${submitted.id}`, 1);
     if (submitted.discountRewardId) await this.progression.consumeMintDiscount(sessionId, submitted.discountRewardId, `mint:${submitted.id}`, 1);
-    const tokenId = mintEvent.tokenId.toString(); const marketplaceUrl = this.config.marketplaceTokenUrlTemplate?.replace('{contract}', this.config.contractAddress).replace('{tokenId}', tokenId);
+    const tokenId = mintEvent.tokenId.toString(); const marketplaceUrl = buildMarketplaceTokenUrl(this.config.marketplaceTokenUrlTemplate, this.config.contractAddress, tokenId);
     const confirmed: MintRecord = { ...submitted, status: 'confirmed', tokenId, marketplaceUrl, updatedAt: this.clock() }; await this.repository.saveMint(confirmed);
     await this.artwork.updateMint(submitted.artworkId, sessionId, { network: 'shido', status: 'confirmed', walletAddress: submitted.walletAddress, contractAddress: submitted.contractAddress, tokenURI: submitted.tokenURI, tokenId, transactionHash: transactionHash as Hex, marketplaceUrl }, 'minted');
     return { mint: publicMint(confirmed), pending: false };

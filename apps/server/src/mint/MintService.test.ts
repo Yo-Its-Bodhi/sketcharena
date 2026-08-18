@@ -24,7 +24,7 @@ describe('MintService', () => {
     const config: MintConfiguration = { enabled: true, missing: [], contractAddress: contract, chainId: 31337, chainName: 'Local EVM', nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
       rpcUrl: 'http://127.0.0.1:8545', walletRpcUrls: ['http://127.0.0.1:8545'], ipfsApiUrl: 'http://127.0.0.1:5001', ipfsPublicGateway: 'http://127.0.0.1:8080/ipfs', signerPrivateKey: signerKey,
       paymentToken, mintUsdCents: 99, priceApiUrl: 'http://price-primary', priceFallbackApiUrl: 'http://price-fallback', maxPriceDeviationBps: 1_000,
-      voucherLifetimeMs: 900_000, requiredConfirmations: 1, publicOrigin: 'http://localhost:5173' };
+      voucherLifetimeMs: 900_000, requiredConfirmations: 1, publicOrigin: 'http://localhost:5173', marketplaceTokenUrlTemplate: 'https://market.example/collection?nft={contract}-{tokenId}' };
     let receipt: TransactionReceipt | null = null; let transaction: Transaction | null = null;
     const chain = { getTransactionReceipt: async () => receipt!, getTransaction: async () => transaction!, getBlockNumber: async () => 10n } satisfies ChainReader;
     const service = new MintService(artwork, progression, mints, config, () => 1_000, fetcher, chain, async () => []);
@@ -61,7 +61,7 @@ describe('MintService', () => {
     receipt = { status: 'success', blockNumber: 10n, logs: [{ address: contract, data, topics }] } as unknown as TransactionReceipt;
     transaction = { to: contract, from: user.address, value: 0n, input: prepared.transactionRequest.data } as unknown as Transaction;
     const result = await service.confirm(player.sessionId, prepared.id, `0x${'9'.repeat(64)}`);
-    expect(result).toMatchObject({ pending: false, mint: { status: 'confirmed', tokenId: '7' } });
+    expect(result).toMatchObject({ pending: false, mint: { status: 'confirmed', tokenId: '7', marketplaceUrl: `https://market.example/collection?nft=${contract}-7` } });
     const firstCredit = (await progression.getPlayer(player.sessionId))!.rewards.find((reward) => reward.campaignId === 'first-panic-archive-mint');
     expect(firstCredit).toMatchObject({ redeemedAmount: 1, redeemedAt: 1_000 });
     expect((await artwork.get(art.id))?.status).toBe('minted');

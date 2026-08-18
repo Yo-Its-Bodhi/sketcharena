@@ -1,12 +1,12 @@
 # Panic Archive voucher contract
 
-Status: compiled implementation draft; **not deployed and not approved for production funds**.
+Status: deployed and live on Shido mainnet at `0x80E81dE12b1412B74475C9354d092091Da4Ea334`; exact runtime and canary evidence are recorded in `PANIC_ARCHIVE_MAINNET_EVIDENCE.md`. Independent review remains outstanding.
 
 The fixed independent-review scope, threat model, role design, parameter sheet and required auditor output are in `PANIC_ARCHIVE_AUDIT_HANDOFF.md`.
 
 Current automated evidence:
 
-- optimized Solidity compilation succeeds and produces 14,731 bytes of deployed code;
+- optimized Solidity compilation succeeds and produces 14,381 bytes of deployed code;
 - the ephemeral-chain harness successfully deploys and verifies free and paid EIP-712 redemption;
 - it rejects incorrect payment, replay, duplicate artwork, revoked vouchers, blocked recipients, unapproved recipients, obsolete signers and paused minting;
 - it rejects recipient, token URI, artwork hash, deadline, price-cap and EIP-712 domain tampering;
@@ -15,7 +15,7 @@ Current automated evidence:
 - a seeded 24-case property run proves ethers/Solidity digest agreement across randomized voucher fields, exact free/paid redemption events, nonce replay rejection, ownership, token URI and artwork provenance invariants;
 - a voucher signed for the primary collection is rejected by a second collection, proving the verifying-contract domain prevents cross-collection replay.
 
-The reproducible seeded property suite is now part of CI. Independent specialist review, any additional auditor-requested fuzz campaigns and a Shido testnet rehearsal remain mandatory before deployment.
+The reproducible seeded property suite is part of CI. A live paid canary has been verified. Independent specialist review and any additional auditor-requested fuzz campaigns remain mandatory before removing the beta risk label; no usable Shido testnet was available for this launch.
 
 `contracts/SketchArenaPanicArchive.sol` is the dedicated one-time collection contract for **Sketch Arena: The Panic Archive**. Seasons, including Season 0 **The First Mess**, are recorded per token rather than represented by separate collection deployments.
 

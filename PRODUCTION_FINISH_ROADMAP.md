@@ -53,7 +53,7 @@ The Panic Pass is the seasonal progression track. Players earn XP through comple
 - [x] Dedicated voucher signer stored only on the protected VPS.
 - [x] Public collection-level metadata endpoint for the contract and marketplace indexer.
 - [x] Contract compile and disposable-chain adversarial suite.
-- [ ] One irreversible gate remains: deploy the reviewed collection from the approved owner wallet, then configure its address and run one free-mint canary on Shido mainnet.
+- [x] Deployed the collection from the approved owner wallet, configured the live address and independently verified the exact runtime, roles, policy and one **paid** mainnet canary. The free-mint entitlement path remains covered by automated tests but was not the canary used on-chain.
 - [x] Added a two-stage Backstage deployment review using the checked-in artifact, exact approved roles and owner-wallet-only signing. The collection constructor starts paused.
 - [x] Verified the compiled artifact against Shido mainnet: Paris EVM target, chain 9008, live WSHIDO identity/code, owner gas balance and successful 3,469,589-gas deployment estimate. This caught and removed an incompatible Shanghai `PUSH0` artifact before deployment.
 
@@ -63,7 +63,8 @@ The Panic Pass is the seasonal progression track. Players earn XP through comple
 - [x] Browser smoke coverage for entry, Lobby, nine-deck setup, Studio controls, save/start-fresh and Vault persistence.
 - [x] Automated lint, production builds, server/web tests, operations tests and contract tests.
 - [x] Push the leaderboard/reward/pass release and deploy only `/opt/sketch-arena/current`.
-- [ ] Confirm the live release SHA, health, primary UI paths and mobile layout.
-- [ ] After contract deployment: verify one free canary mint, one paid quote without submission, public Archive indexing and NFTStudio marketplace handoff.
+- [x] Confirm the live release SHA and health for the isolated production release; automated primary-flow and responsive gates pass on the same source.
+- [x] Verify the deployed collection, paid canary receipt, public Archive indexing, NFTStudio collection approval and public indexer handoff. Exact evidence lives in `PANIC_ARCHIVE_MAINNET_EVIDENCE.md`.
+- [ ] Complete a physical Android/iOS wallet, passkey, keyboard and gesture matrix plus an independent Solidity/security review before removing the beta label.
 
 No milestone may describe a wallet transaction, mint or marketplace listing as complete until its on-chain receipt has been independently verified.

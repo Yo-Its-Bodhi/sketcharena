@@ -6,12 +6,12 @@ import express, { type ErrorRequestHandler } from 'express';
 import helmet from 'helmet';
 import { Server } from 'socket.io';
 import { z } from 'zod';
-import type { ClientToServerEvents, MatchResult, ServerToClientEvents, Stroke } from '@sketch-arena/protocol';
+import type { ArtworkDocument, ClientToServerEvents, MatchResult, ServerToClientEvents, Stroke } from '@sketch-arena/protocol';
 import { FileArtworkRepository, MemoryArtworkRepository, toPanicArchiveItem } from './artwork/ArtworkRepository.js';
 import { GAME, GameRoom } from './game/GameRoom.js';
 import { ACTIVE_SEASON_ITEMS, FileProgressionRepository, MemoryProgressionRepository, type PlayerProgress } from './progression/ProgressionRepository.js';
 import { FileMintRepository, MemoryMintRepository } from './mint/MintRepository.js';
-import { MintService, MintServiceError, loadMintConfiguration } from './mint/MintService.js';
+import { buildMarketplaceTokenUrl, MintService, MintServiceError, loadMintConfiguration } from './mint/MintService.js';
 import { SlidingLimit } from './rateLimit.js';
 import { BackstageAuth, type BackstageRole } from './backstageAuth.js';
 import { FilePromotionRepository, MemoryPromotionRepository, PromotionService } from './promotion/PromotionRepository.js';
@@ -251,11 +251,16 @@ const contractAccessSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('set-allowlist'), enabled: z.boolean() }),
   z.object({ action: z.literal('set-paused'), enabled: z.boolean() }),
 ]);
+const withMarketplaceUrl = (record: ArtworkDocument): ArtworkDocument => {
+  if (!record.mint || record.mint.marketplaceUrl) return record;
+  const marketplaceUrl = buildMarketplaceTokenUrl(minting.config.marketplaceTokenUrlTemplate, record.mint.contractAddress, record.mint.tokenId);
+  return marketplaceUrl ? { ...record, mint: { ...record.mint, marketplaceUrl } } : record;
+};
 app.get('/api/rooms', (_request, response) => response.json(publicRooms()));
 app.get('/api/archive', async (request, response) => {
   const limit = z.coerce.number().int().min(1).max(100).catch(48).parse(request.query.limit);
   const records = minting.config.contractAddress ? await artwork.listMinted(limit, minting.config.contractAddress) : [];
-  const items = records.map(toPanicArchiveItem);
+  const items = records.map(withMarketplaceUrl).map(toPanicArchiveItem);
   return response.json({ collection: 'Sketch Arena: The Panic Archive', season: { id: 0, name: 'The First Mess' }, total: items.length, items });
 });
 app.get('/api/archive/metadata', (_request, response) => {
@@ -321,7 +326,7 @@ app.post('/api/progression/rewards/:rewardId/acknowledge', async (request, respo
 app.get('/api/artworks', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request);
   if (!ownerSessionId) return response.status(401).json({ error: 'Vault authentication required' });
-  return response.json(await artwork.listByOwner(ownerSessionId));
+  return response.json((await artwork.listByOwner(ownerSessionId)).map(withMarketplaceUrl));
 });
 const rewardFields = {
   kind: z.enum(['mint-credit', 'mint-discount', 'xp', 'item', 'achievement', 'battle-pass']), amount: z.number().int().min(1).max(100_000),

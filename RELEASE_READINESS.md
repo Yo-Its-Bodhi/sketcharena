@@ -1,8 +1,8 @@
 # Sketch Arena release-readiness matrix
 
-Audit date: 2026-08-16
+Audit date: 2026-08-18
 
-This is the requirement-to-evidence record for the iSketch/SketchArena production-finish brief. **Proven locally** means current source plus direct automated or browser evidence supports the claim. **External gate** means the repository deliberately cannot prove the claim without reviewed live infrastructure or authority. No live contract deployment is implied by this document.
+This is the requirement-to-evidence record for the iSketch/SketchArena production-finish brief. **Proven locally** means current source plus direct automated or browser evidence supports the claim. **Live verified** means the named public service or Shido state was independently read on the stated date. Exact contract evidence is pinned in `PANIC_ARCHIVE_MAINNET_EVIDENCE.md`.
 
 | Area | Status | Authoritative evidence | Remaining gate |
 | --- | --- | --- | --- |
@@ -27,30 +27,29 @@ This is the requirement-to-evidence record for the iSketch/SketchArena productio
 | Backup integrity | Proven locally | The least-privilege production job creates a custom-format `pg_dump`, keeps the URL out of process arguments, writes a restrictive SHA-256 manifest and validates the artifact with `pg_restore --list`; the harness detects corruption. JSON manifest backup remains for development/migration snapshots | Install PostgreSQL client tools and the timer on a separate volume, configure off-host replication/retention and PITR, then execute a real restore drill |
 | Backstage production access | Proven locally | Named hashed viewer/operator/admin principals, duplicate detection and production fail-closed startup; shared compatibility token requires an explicit migration override | Provision real named staff credentials, document rotation and add upstream MFA/SSO if required |
 | Player moderation | Proven locally | Host removal room-bans the target and rebalances active turns; any player can file a private categorized report against an authoritative room identity; duplicate/hour limits, protected durable storage, staff-only evidence and named operator resolution are covered through Socket.IO-to-Backstage integration | Publish community rules, staff response targets, escalation/appeal policy and rehearse the live moderation runbook |
-| Wallet ownership proof | Proven locally | Five-minute single-use challenges, real signature verification, durable binding and matching-wallet reuse; secrets remain server-only | Test the final supported desktop/mobile wallet matrix on Shido testnet |
+| Wallet ownership proof | Proven locally and exercised live | Five-minute single-use challenges, real signature verification, durable binding and matching-wallet reuse; secrets remain server-only; a production wallet completed the canary mint | Complete the final physical desktop/mobile wallet matrix |
 | Voucher pricing and rewards | Proven locally | Server resolves Mint Credit/discount eligibility, reserves one entitlement unit and signs exact recipient/URI/artwork/price/nonce/deadline/season/campaign fields | Secure production signer provisioning and rotation ceremony |
 | IPFS preparation | Proven locally | Server renders canonical SVG, pins media then public-safe metadata, rejects invalid/storage failures and never exposes the private Kubo API | Verify NFTStudio production Kubo credentials, retention and backup policy |
-| Mint confirmation | Proven locally | Server independently verifies transaction sender/contract, receipt status, confirmation depth and exact `PanicArchiveMinted` fields before consuming rewards or marking artwork minted | Shido testnet and then mainnet receipt rehearsal |
+| Mint confirmation | Live verified | Server independently verifies transaction sender/contract, receipt status, confirmation depth and exact `PanicArchiveMinted` fields; the paid PANIC #1 mainnet canary receipt and event were independently re-read | Add recurring RPC/wallet chaos drills |
 | Wallet failure UX | Proven locally | Classified cancellation, authorization, disconnection, wrong chain, pending request, insufficient gas, replacement, nonce, revert, RPC and safe fallback messages; polling cancels on close and submissions are immediately locked | Live wallet/RPC chaos matrix on testnet |
-| Panic Archive contract | Proven locally, not production-approved | Solidity 0.8.26 compile at 14,731 bytes; ephemeral-chain suite covers paid/free mint, replay, tampering, allow/block, pause, signer rotation, supply, interfaces, reentrancy, payout rejection and locks; seeded randomized properties verify digest agreement, event/provenance invariants and cross-contract replay rejection | Independent audit, any auditor-requested extended fuzzing, Shido testnet, explicit deployment approval and multisig ownership |
-| Backstage contract controls | Proven locally | Block, approve and allowlist transactions decode against the exact Solidity selectors; owner wallet must review and submit them | Test against the deployed reviewed address |
-| Public Panic Archive | Proven locally | Anonymous confirmed-only feed excludes drafts, pending mints, wallet bindings and private session IDs; token receipt/share UI works and empty states are honest | Populate only after real confirmed events exist |
-| Marketplace handoff | External gate | Application creates a token URL only from an HTTPS template containing the exact contract and token ID, after confirmation | NFTStudio approval/indexer behavior, canonical URL structure, indexing delay and metadata refresh must be verified live |
+| Panic Archive contract | Live verified; independent audit outstanding | Solidity 0.8.26 runtime is 14,381 bytes and matches the checked-in artifact; live roles, policy, paid PANIC #1 receipt, metadata and retained original-artist royalty were independently checked | Independent audit, any auditor-requested extended fuzzing and migration of ownership to a reviewed multisig when available |
+| Backstage contract controls | Implemented and live-address aware | Block, approve and allowlist transactions decode against the exact Solidity selectors; owner wallet must review and submit them | Rehearse emergency pause and signer rotation without exposing keys |
+| Public Panic Archive | Live verified | Anonymous confirmed-only feed exposes PANIC #1 while excluding drafts, pending mints, wallet bindings and private session IDs | Continue privacy/regression monitoring as supply grows |
+| Marketplace handoff | Live verified | NFTStudio Marketplace V2 reports the collection approved; the public indexer exposes The Panic Archive and PANIC #1 under the canonical on-chain slug | Monitor indexing delay/refresh behavior and prove purchase/cancel/settlement receipts |
 | Release gates | Proven locally | `npm run check` passes strict lint, all TypeScript/production builds, 60 always-on server tests, 5 web tests and backup/migration integrity testing; six additional PostgreSQL integration tests are configured for CI; `npm run qa:load` exercises real Socket.IO fan-out and budgets; pinned contract compile/property/adversarial evidence and zero production advisories pass | Authenticate GitHub, push the release commit, observe PostgreSQL and contract jobs cleanly, then perform a commit-SHA-matched live smoke |
 
 ## Current release decision
 
-The local single-instance game and fail-closed NFT application boundary are release-candidate quality. Minting remains deliberately unavailable without complete production configuration. The full product is **not yet production-approved** because contract review/deployment, Shido testnet behavior and NFTStudio marketplace indexing are external evidence gaps, not because the UI should fabricate those outcomes.
+The application, minting boundary, deployed Panic Archive and NFTStudio collection handoff are live beta quality. The irreversible on-chain state is recorded in `PANIC_ARCHIVE_MAINNET_EVIDENCE.md`. The beta label should remain until an independent Solidity/security review, physical mobile/passkey/wallet matrix, restore drill and ongoing production monitoring are complete.
 
 ### Public-host evidence
 
-On 2026-08-16, `https://sketch.bodhix.io/` served the branded game and both public health endpoints returned healthy responses. That host is **not** the audited release candidate: `/health/live` and `/health/ready` omitted the required `release` commit identifier emitted by current source. A successful HTTP response from that older deployment must not be used as commit-matched launch evidence.
+On 2026-08-18, `https://sketch.bodhix.io/` served the isolated release at Git commit `1a6313eee0b9c50faf35a6cbba4c835e970f744f`; both health endpoints were healthy and the release had no service warnings or restarts after deployment. PANIC #1, collection approval and NFTStudio indexing were independently verified against public production state.
 
 ## External handoff sequence
 
-1. Independent Solidity review plus broader fuzz/property testing.
-2. Approve the final collection name, supply, max voucher price, royalty policy, payout receiver, mint signer and multisig owner.
-3. Explicitly authorize a Shido testnet deployment; run the wallet, free/paid/discount, revert, replacement and receipt-confirmation matrix.
-4. Have NFTStudio approve/index the test collection and document the exact token URL, indexing delay and refresh behavior.
-5. Configure a private signer, Kubo credentials, backed-up data volumes, marketplace template, monitoring and alerting.
-6. Rerun all repository gates against the release commit, deploy the reviewed contract once with explicit approval, transfer ownership to multisig and perform the production smoke test.
+1. Commission an independent Solidity/security review and run any requested extended fuzz/property campaigns.
+2. Rehearse emergency pause, signer rotation, owner recovery and marketplace cancellation/settlement with receipt evidence.
+3. Complete physical Android/iOS/desktop wallet, passkey, keyboard, safe-area and Studio gesture testing.
+4. Execute and document an actual PostgreSQL restore/PITR drill plus off-host retention.
+5. Keep external health, error-rate, signer, RPC, mint and indexer alerts active before widening beta access.

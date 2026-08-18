@@ -1,6 +1,6 @@
 # Panic Archive independent security-review handoff
 
-Status: ready to submit for independent review; not deployed and not approved for funds.
+Status: deployed and live on Shido mainnet; still awaiting independent Solidity review. See `PANIC_ARCHIVE_MAINNET_EVIDENCE.md` for the exact address, runtime proof, confirmed paid canary and NFTStudio handoff.
 
 This document fixes the intended review boundary for `SketchArenaPanicArchive.sol`. The final auditor package must reference the immutable Git commit produced by the release workflow. Any source change after that commit invalidates the review scope until the auditor accepts the diff.
 
@@ -96,7 +96,7 @@ Record approved values and approvers in the release ticket. Blank values prohibi
 | Artist royalty | 500 bps (5%) per token, permanently payable to that token's original minting wallet—not the Sketch Arena owner or treasury |
 | Voucher maximum lifetime | 900 seconds; approved by product owner |
 | Minimum confirmation depth | 3 confirmations; approved by product owner |
-| Marketplace-approved collection process | **TBD / evidence required** |
+| Marketplace-approved collection process | Approved by NFTStudio Marketplace V2 at `0x19ee7a8D5Ee19c38d1754290b483BE6f4483e9d6`; indexed slug and public URL are recorded in `PANIC_ARCHIVE_MAINNET_EVIDENCE.md` |
 
 The exact Paris-targeted creation transaction was successfully estimated against Shido mainnet on 2026-08-17 at 3,469,589 gas. Gas price and final wallet cost remain live network values and must be reviewed in the wallet at signing time.
 
@@ -111,15 +111,15 @@ The exact Paris-targeted creation transaction was successfully estimated against
 - fix verification against a new immutable commit;
 - final statement identifying unresolved risks and the exact reviewed commit.
 
-## Deployment gates after review
+## Deployment gates and current evidence
 
 1. Resolve or formally accept every finding with named approval.
 2. Rerun all gates on the reviewed commit.
 3. Because no working Shido testnet is being used, obtain explicit authorization for the elevated-risk mainnet path.
-4. Deploy mainnet paused, then verify bytecode, constructor parameters, roles and signer before accepting any voucher.
-5. Execute one controlled free canary mint and exercise pause plus signer rotation readiness.
-6. Open public minting only after the canary evidence is accepted by the product owner.
+4. **Complete:** mainnet was deployed paused and the runtime, constructor parameters, roles and signer were independently read back.
+5. **Partially complete:** one controlled **paid** canary was confirmed and its receipt, event, token URI and original-artist royalty were verified. This is not evidence of the free-mint entitlement path.
+6. **Complete:** public minting is open and the collection is approved and indexed by NFTStudio. Pause and signer-rotation readiness must remain part of recurring operations.
 
 Backstage can prepare the exact checked-in artifact and constructor arguments for the approved owner wallet. It cannot sign, cannot accept a private key, refuses a second deployment after an address is configured, and verifies a successful receipt has contract code before displaying an address. The constructor starts paused; a separate owner transaction is required to unpause after independent verification.
 
-After deployment, `npm run contract:verify:mainnet -- 0xCollectionAddress` compares the normalized on-chain runtime against the reviewed artifact (accounting only for compiler-recorded immutable slots) and independently verifies every role, immutable, policy, metadata, identity and paused/no-mints-yet invariant before the application address may be configured.
+Before opening a pristine deployment, `npm run contract:verify:mainnet -- 0xCollectionAddress` checks the paused/no-mints-yet state. For a live deployment, use `--state live-canary` with the exact canary transaction, IPFS token URI and WSHIDO base-unit price; the command then verifies the receipt, mint event, current ownership, metadata and original-artist royalty as well as every common runtime, role and policy invariant.

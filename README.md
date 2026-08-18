@@ -84,7 +84,7 @@ Production-ready starting points are included in `deploy/nginx-sketch-arena.conf
 5. independently reads the Shido receipt and matching `PanicArchiveMinted` event before consuming a Mint Credit or marking the artwork minted;
 6. creates a marketplace link only from an explicitly configured, verified token URL template.
 
-The planned collection is **Sketch Arena: The Panic Archive**, with seasons represented inside one permanent collection (Season 0: **The First Mess**). Mint Credits, Battle Pass rewards and signed-voucher eligibility are modeled off-chain now. The server returns a deliberate `503` and the UI explains that setup is incomplete until every required production value in `.env.example` is supplied. No contract has been deployed by this repository.
+The live collection is **Sketch Arena: The Panic Archive**, with seasons represented inside one permanent collection (Season 0: **The First Mess**). Mint Credits, Battle Pass rewards and signed-voucher eligibility are resolved server-side, while the player submits the signed redemption from their own wallet. The server still fails closed with `503` whenever required production configuration is incomplete. The deployed address and independently rechecked evidence live in `PANIC_ARCHIVE_MAINNET_EVIDENCE.md`.
 
 Backstage can issue direct Mint Credits, percentage-discount entitlements, individual rewards, preview-confirmed global drops, and redeemable promo campaigns. Discounts never alter the transaction in the browser: the server resolves the best valid benefit and signs the final reduced voucher price. Promo redemption is rate-limited and does not require a wallet.
 
