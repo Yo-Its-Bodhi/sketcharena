@@ -3,7 +3,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, parseAbi, parseAbiItem, verifyTypedData, type Hex, type Transaction, type TransactionReceipt } from 'viem';
 import { MemoryArtworkRepository } from '../artwork/ArtworkRepository.js';
 import { MemoryProgressionRepository } from '../progression/ProgressionRepository.js';
-import { MemoryMintRepository } from './MintRepository.js';
+import { MemoryMintRepository, type MintRecord } from './MintRepository.js';
 import { MintService, type ChainReader, type MintConfiguration } from './MintService.js';
 
 const userKey = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
@@ -90,5 +90,29 @@ describe('MintService', () => {
     expect(await service.verifyInfrastructure(true)).toMatchObject({ enabled: false, missing: ['PANIC_ARCHIVE_SIGNER_MISMATCH'] });
     failures = [];
     expect(await service.verifyInfrastructure(true)).toMatchObject({ enabled: true, missing: [] });
+  });
+
+  it('abandons retired-contract attempts for deletion but protects current-contract submissions', async () => {
+    const now = 10_000; const sessionId = '11111111-1111-4111-8111-111111111111';
+    const artwork = new MemoryArtworkRepository(); const progression = new MemoryProgressionRepository(() => now); const mints = new MemoryMintRepository();
+    const config: MintConfiguration = { enabled: false, missing: [], contractAddress: contract, chainId: 31337, chainName: 'Local EVM', nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      walletRpcUrls: [], paymentToken, mintUsdCents: 99, priceApiUrl: 'http://price-primary', priceFallbackApiUrl: 'http://price-fallback', maxPriceDeviationBps: 1_000,
+      voucherLifetimeMs: 900_000, requiredConfirmations: 1, publicOrigin: 'http://localhost:5173' };
+    const retiredContract = '0x0000000000000000000000000000000000000002' as const;
+    const retiredArt = await artwork.save({ ownerSessionId: sessionId, origin: 'studio', status: 'mint-ready', title: 'Old panic', canvasRatio: 'square', width: 1200, height: 1200, strokes: [] });
+    const record = { id: '22222222-2222-4222-8222-222222222222', artworkId: retiredArt.id, ownerSessionId: sessionId, status: 'submitted', walletAddress: privateKeyToAccount(userKey).address,
+      contractAddress: retiredContract, chainId: 31337, chainName: 'Local EVM', nativeCurrency: config.nativeCurrency, paymentToken: { address: paymentToken, name: 'Wrapped Shido', symbol: 'WSHIDO', decimals: 18 }, rpcUrls: [],
+      mediaURI: 'ipfs://media', tokenURI: 'ipfs://metadata', voucher: { recipient: privateKeyToAccount(userKey).address, tokenURIHash: `0x${'1'.repeat(64)}`, artworkHash: `0x${'2'.repeat(64)}`, price: '0', nonce: '1', deadline: '100', seasonId: 0, campaignId: `0x${'3'.repeat(64)}` },
+      signature: '0x00', transactionRequest: { to: retiredContract, from: privateKeyToAccount(userKey).address, value: '0x0', data: '0x00' }, usesMintCredit: true, expiresAt: now + 5_000, createdAt: now, updatedAt: now } satisfies MintRecord;
+    await mints.saveMint(record); await artwork.updateMint(retiredArt.id, sessionId, { network: 'shido', status: 'submitted', walletAddress: record.walletAddress, contractAddress: retiredContract, tokenURI: record.tokenURI }, 'mint-ready');
+    const service = new MintService(artwork, progression, mints, config, () => now);
+    await expect(service.releaseForArtworkDeletion(sessionId, retiredArt.id)).resolves.toBeUndefined();
+    expect(await mints.getMint(record.id, sessionId)).toMatchObject({ status: 'failed', error: 'Abandoned after the collection contract was retired' });
+
+    const activeArt = await artwork.save({ ownerSessionId: sessionId, origin: 'studio', status: 'mint-ready', title: 'Live panic', canvasRatio: 'square', width: 1200, height: 1200, strokes: [] });
+    const activeRecord = { ...record, id: '33333333-3333-4333-8333-333333333333', artworkId: activeArt.id, contractAddress: contract, transactionRequest: { ...record.transactionRequest, to: contract } } satisfies MintRecord;
+    await mints.saveMint(activeRecord); await artwork.updateMint(activeArt.id, sessionId, { network: 'shido', status: 'submitted', walletAddress: activeRecord.walletAddress, contractAddress: contract, tokenURI: activeRecord.tokenURI }, 'mint-ready');
+    await expect(service.releaseForArtworkDeletion(sessionId, activeArt.id)).rejects.toThrow('active contract');
+    expect(await mints.getMint(activeRecord.id, sessionId)).toMatchObject({ status: 'submitted' });
   });
 });

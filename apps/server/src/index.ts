@@ -346,7 +346,7 @@ app.delete('/api/artworks/:artworkId', async (request, response) => {
   const artworkId = z.string().uuid().safeParse(request.params.artworkId); if (!artworkId.success) return response.status(400).json({ error: 'Artwork ID is invalid' });
   const record = await artwork.get(artworkId.data);
   if (!record || record.ownerSessionId !== ownerSessionId) return response.status(404).json({ error: 'Artwork not found in your Vault' });
-  if (record.mint?.status === 'prepared' || record.mint?.status === 'submitted') return response.status(409).json({ error: 'This artwork has a mint in progress. Wait for it to confirm or expire before deleting the server copy.' });
+  try { await minting.releaseForArtworkDeletion(ownerSessionId, artworkId.data); } catch (error) { return sendMintError(response, error); }
   return await artwork.deleteOwned(artworkId.data, ownerSessionId) ? response.status(204).send() : response.status(404).json({ error: 'Artwork not found in your Vault' });
 });
 app.post('/api/artworks/:artworkId/mint/prepare', async (request, response) => {

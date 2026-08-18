@@ -295,6 +295,26 @@ export class MintService {
   async binding(sessionId: string): Promise<{ address: Address; verifiedAt: number } | null> { return this.repository.getBinding(sessionId); }
   async getForArtwork(sessionId: string, artworkId: string): Promise<MintPreparation | null> { const record = await this.repository.getMintByArtwork(artworkId, sessionId); return record ? publicMint(record) : null; }
 
+  async releaseForArtworkDeletion(sessionId: string, artworkId: string): Promise<void> {
+    const art = await this.artwork.get(artworkId);
+    if (!art || art.ownerSessionId !== sessionId) throw new MintServiceError('Artwork not found in your Vault', 404);
+    const record = await this.repository.getMintByArtwork(artworkId, sessionId);
+    const inProgress = record?.status === 'prepared' || record?.status === 'submitted';
+    const embeddedInProgress = art.mint?.status === 'prepared' || art.mint?.status === 'submitted';
+    if (!inProgress && !embeddedInProgress) return;
+
+    const activeContract = this.config.contractAddress?.toLowerCase();
+    const attemptedContract = (record?.contractAddress ?? art.mint?.contractAddress)?.toLowerCase();
+    const retiredContract = Boolean(activeContract && attemptedContract && activeContract !== attemptedContract);
+    const expiredPreparation = record?.status === 'prepared' && record.expiresAt <= this.clock();
+    if (!retiredContract && !expiredPreparation) throw new MintServiceError('This artwork has a mint in progress on the active contract. Wait for it to confirm or expire before deleting the server copy.', 409);
+
+    if (record && inProgress) {
+      await this.repository.saveMint({ ...record, status: record.status === 'prepared' ? 'expired' : 'failed',
+        error: retiredContract ? 'Abandoned after the collection contract was retired' : 'Expired before the artwork was deleted', updatedAt: this.clock() });
+    }
+  }
+
   prepareContractAccessTransaction(input: ContractAccessAction): ContractAdminTransaction {
     assertContractControls(this.config); let data: Hex; let summary: string;
     if (input.action === 'set-allowlist') { data = encodeFunctionData({ abi: PANIC_ARCHIVE_ABI, functionName: 'setAllowlistRequired', args: [input.enabled] }); summary = input.enabled ? 'Require approved wallets for every new mint' : 'Open mint redemption to wallets holding a valid signed voucher'; }
