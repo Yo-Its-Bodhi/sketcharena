@@ -24,19 +24,19 @@ function drillDatabaseName(now = new Date(), random = randomBytes(4).toString('h
   return `sketch_arena_restore_drill_${stamp}_${random}`;
 }
 
-export async function restorePostgresDrill({ connectionString, backupDirectory, now = new Date(), random, runner = defaultRunner }) {
+export async function restorePostgresDrill({ connectionString, backupDirectory, now = new Date(), random, databaseName: requestedDatabaseName, precreated = false, runner = defaultRunner }) {
   if (!connectionString?.trim()) throw new Error('DATABASE_URL is required for a PostgreSQL restore drill');
   if (!backupDirectory?.trim()) throw new Error('A verified backup directory is required for a PostgreSQL restore drill');
   const directory = resolve(backupDirectory);
   const manifest = await verifyPostgresBackup(directory, runner);
   const source = postgresEnvironment(connectionString);
-  const databaseName = drillDatabaseName(now, random);
+  const databaseName = requestedDatabaseName ?? drillDatabaseName(now, random);
   if (databaseName === source.PGDATABASE || !/^sketch_arena_restore_drill_[0-9]{14}_[0-9a-f]{8}$/.test(databaseName)) throw new Error('Unsafe restore-drill database name');
   const administration = { ...source, PGDATABASE: 'postgres', PGAPPNAME: 'sketch-arena-restore-drill' };
   const target = { ...source, PGDATABASE: databaseName, PGAPPNAME: 'sketch-arena-restore-drill' };
-  let created = false;
+  let created = precreated;
   try {
-    await runner('createdb', ['--maintenance-db=postgres', '--encoding=UTF8', databaseName], administration); created = true;
+    if (!precreated) { await runner('createdb', ['--maintenance-db=postgres', '--encoding=UTF8', databaseName], administration); created = true; }
     await runner('pg_restore', ['--exit-on-error', '--no-owner', '--no-privileges', `--dbname=${databaseName}`, resolve(directory, manifest.file)], target);
     const result = await runner('psql', ['--no-psqlrc', '--tuples-only', '--no-align', '--set=ON_ERROR_STOP=1', `--dbname=${databaseName}`, '--command', countQuery], target);
     const counts = JSON.parse(result.stdout.trim());
@@ -50,8 +50,11 @@ export async function restorePostgresDrill({ connectionString, backupDirectory, 
 
 async function main() {
   const backupIndex = process.argv.indexOf('--backup'); const backupDirectory = backupIndex >= 0 ? process.argv[backupIndex + 1] : undefined;
+  const databaseIndex = process.argv.indexOf('--database'); const databaseName = databaseIndex >= 0 ? process.argv[databaseIndex + 1] : undefined;
+  const precreated = process.argv.includes('--precreated');
   if (!backupDirectory) throw new Error('Usage: npm run ops:restore:drill -- --backup <verified-backup-directory>');
-  const result = await restorePostgresDrill({ connectionString: process.env.DATABASE_URL, backupDirectory });
+  if (precreated !== Boolean(databaseName)) throw new Error('--precreated requires one safe --database sketch_arena_restore_drill_* name');
+  const result = await restorePostgresDrill({ connectionString: process.env.DATABASE_URL, backupDirectory, databaseName, precreated });
   console.log(JSON.stringify({ restored: true, sourceBackup: result.manifest.createdAt, temporaryDatabaseRemoved: result.databaseName, counts: result.counts }, null, 2));
 }
 

@@ -41,3 +41,20 @@ test('removes the isolated database when restore validation fails', async () => 
     assert.equal(calls.at(-1).command, 'dropdb'); assert.ok(calls.at(-1).args.includes('sketch_arena_restore_drill_20260818201000_feedface'));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('uses and removes a safely precreated least-privilege drill database', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sketch-arena-restore-precreated-')); const calls = [];
+  const runner = async (command, args, environment) => {
+    calls.push({ command, args, environment });
+    if (command === 'pg_dump') { const file = args.find((value) => value.startsWith('--file=')).slice(7); await writeFile(file, 'mock-custom-postgres-dump'); }
+    if (command === 'psql') return { stdout: JSON.stringify({ migrations: 10, accounts: 0, artworks: 0, mints: 0, progression: 0, promotions: 0, reports: 0, matches: 0 }), stderr: '' };
+    return { stdout: command === 'pg_restore' ? 'mock contents' : '', stderr: '' };
+  };
+  try {
+    const backup = await createPostgresBackup({ connectionString, destination: root, runner }); calls.length = 0;
+    const databaseName = 'sketch_arena_restore_drill_20260818201500_cafebabe';
+    await restorePostgresDrill({ connectionString, backupDirectory: backup.directory, databaseName, precreated: true, runner });
+    assert.equal(calls.some((call) => call.command === 'createdb'), false); assert.equal(calls.at(-1).command, 'dropdb'); assert.ok(calls.at(-1).args.includes(databaseName));
+    await assert.rejects(() => restorePostgresDrill({ connectionString, backupDirectory: backup.directory, databaseName: 'sketch_arena', precreated: true, runner }), /Unsafe restore-drill database name/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
