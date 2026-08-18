@@ -4,11 +4,14 @@ import { sampleStrokePoints, splitStrokeForTransport } from './strokeTransport';
 
 export type LayerBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten';
 export interface CanvasLayer { id: string; name: string; strokes: Stroke[]; visible: boolean; opacity: number; locked: boolean; blendMode: LayerBlendMode; }
+export interface CanvasViewport { zoom: number; rotation: number; panX: number; panY: number; }
 interface Props {
   strokes: Stroke[]; active: boolean; expert?: boolean; layers?: CanvasLayer[]; activeLayerId?: string;
   width?: number; height?: number; onStroke?: (stroke: Stroke) => void; onPreview?: (stroke: Stroke) => void;
   onClear?: () => void; onUndo?: () => void; activeLayerLocked?: boolean; onLayerTranslate?: (x: number, y: number) => void;
   transportPointLimit?: number;
+  viewport?: CanvasViewport; onViewportChange?: (viewport: CanvasViewport) => void; panMode?: boolean;
+  expertPanelCollapsed?: boolean; onToggleExpertPanel?: () => void;
 }
 type CanvasTool = DrawTool | 'eyedropper' | 'move' | 'line' | 'rectangle' | 'ellipse' | 'arrow' | 'triangle';
 interface LayerRenderCache { canvas: HTMLCanvasElement; strokes: Stroke[]; pixelWidth: number; pixelHeight: number; ratio: number; }
@@ -44,9 +47,11 @@ function loadCustomColors(): string[] {
   catch { return []; }
 }
 
-export function Canvas({ strokes, active, expert = false, layers, activeLayerId, width = 2400, height = 2400, onStroke, onPreview, onClear, onUndo, activeLayerLocked = false, onLayerTranslate, transportPointLimit }: Props) {
+export function Canvas({ strokes, active, expert = false, layers, activeLayerId, width = 2400, height = 2400, onStroke, onPreview, onClear, onUndo, activeLayerLocked = false, onLayerTranslate, transportPointLimit, viewport = { zoom: 1, rotation: 0, panX: 0, panY: 0 }, onViewportChange, panMode = false, expertPanelCollapsed = false, onToggleExpertPanel }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null); const boardRef = useRef<HTMLDivElement>(null);
   const current = useRef<Stroke | null>(null); const lastPreview = useRef(0); const moveStart = useRef<{ x: number; y: number } | null>(null); const moveEnd = useRef<{ x: number; y: number } | null>(null);
+  const spaceHeld = useRef(false); const panDrag = useRef<{ pointerId: number; clientX: number; clientY: number; viewport: CanvasViewport } | null>(null);
+  const touches = useRef(new Map<number, { x: number; y: number }>()); const touchGesture = useRef<{ distance: number; angle: number; centerX: number; centerY: number; viewport: CanvasViewport } | null>(null);
   const layerRenderCache = useRef<Map<string, LayerRenderCache>>(new Map()); const previewSurface = useRef<PreviewSurface | null>(null);
   const equippedBrush = expert ? localStorage.getItem('sketch-equipped-brush') : null; const equippedPreset = equippedBrush ? COSMETIC_BRUSHES[equippedBrush] : undefined;
   const [tool, setTool] = useState<CanvasTool>('pencil'); const [brush, setBrush] = useState<BrushStyle>(() => equippedPreset?.brush ?? 'pencil');
@@ -58,8 +63,8 @@ export function Canvas({ strokes, active, expert = false, layers, activeLayerId,
   const render = useCallback(() => {
     const canvas = canvasRef.current; const board = boardRef.current; if (!canvas || !board) return;
     const context = canvas.getContext('2d'); if (!context) return;
-    const ratio = window.devicePixelRatio || 1; const rect = board.getBoundingClientRect();
-    const pixelWidth = Math.max(1, Math.floor(rect.width * ratio)); const pixelHeight = Math.max(1, Math.floor(rect.height * ratio));
+    const ratio = window.devicePixelRatio || 1;
+    const pixelWidth = Math.max(1, Math.floor(board.clientWidth * ratio)); const pixelHeight = Math.max(1, Math.floor(board.clientHeight * ratio));
     if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) { canvas.width = pixelWidth; canvas.height = pixelHeight; }
     context.globalAlpha = 1; context.globalCompositeOperation = 'source-over'; context.fillStyle = '#f4f0e8'; context.fillRect(0, 0, pixelWidth, pixelHeight);
     if (layers) {
@@ -97,38 +102,51 @@ export function Canvas({ strokes, active, expert = false, layers, activeLayerId,
 
   useEffect(() => { render(); }, [render]);
   useEffect(() => { localStorage.setItem('sketch-arena-custom-colors', JSON.stringify(customColors)); }, [customColors]);
-  useEffect(() => { const listener = () => render(); window.addEventListener('resize', listener); return () => window.removeEventListener('resize', listener); }, [render]);
+  useEffect(() => { const board = boardRef.current; if (!board) return; const observer = new ResizeObserver(() => render()); observer.observe(board); return () => observer.disconnect(); }, [render]);
   useEffect(() => {
     if (!active) return;
     const listener = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); onUndo?.(); return; }
+      if (event.code === 'Space') { event.preventDefault(); spaceHeld.current = true; return; }
       const key = event.key.toLowerCase(); if (key === 'p' || key === 'b') setTool('pencil'); if (key === 'e') setTool('eraser');
       if (key === 'f') setTool('fill'); if (key === 'i') setTool('eyedropper'); if (key === 'v') setTool('move');
       if (key === 'l') setTool('line'); if (key === 'r') setTool('rectangle'); if (key === 'o') setTool('ellipse');
     };
-    window.addEventListener('keydown', listener); return () => window.removeEventListener('keydown', listener);
+    const release = (event: KeyboardEvent) => { if (event.code === 'Space') spaceHeld.current = false; };
+    window.addEventListener('keydown', listener); window.addEventListener('keyup', release); return () => { window.removeEventListener('keydown', listener); window.removeEventListener('keyup', release); };
   }, [active, onUndo]);
 
   const point = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    return { x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)), pressure: event.pressure > 0 ? event.pressure : .5 };
+    const board = boardRef.current; if (!board) return { x: 0, y: 0, pressure: .5 };
+    return { ...screenToCanvasPoint(event.clientX, event.clientY, board, viewport), pressure: event.pressure > 0 ? event.pressure : .5 };
   };
   const pickColor = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current; if (!canvas) return; const rect = canvas.getBoundingClientRect();
-    const x = Math.max(0, Math.min(canvas.width - 1, Math.floor((event.clientX - rect.left) / rect.width * canvas.width)));
-    const y = Math.max(0, Math.min(canvas.height - 1, Math.floor((event.clientY - rect.top) / rect.height * canvas.height)));
+    const canvas = canvasRef.current; const board = boardRef.current; if (!canvas || !board) return; const local = screenToCanvasPoint(event.clientX, event.clientY, board, viewport);
+    const x = Math.max(0, Math.min(canvas.width - 1, Math.floor(local.x * canvas.width)));
+    const y = Math.max(0, Math.min(canvas.height - 1, Math.floor(local.y * canvas.height)));
     const pixel = canvas.getContext('2d')?.getImageData(x, y, 1, 1).data; if (!pixel) return;
     setColor(`#${[pixel[0], pixel[1], pixel[2]].map((value) => value!.toString(16).padStart(2, '0')).join('')}`); setTool('pencil');
   };
   const down = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!active) return; if (tool === 'eyedropper') { pickColor(event); return; } if (activeLayerLocked) return; event.currentTarget.setPointerCapture(event.pointerId);
+    if (!active) return;
+    if (event.pointerType === 'touch') {
+      touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (touches.current.size === 2) { current.current = null; moveStart.current = null; const pair = [...touches.current.values()]; touchGesture.current = gestureSnapshot(pair[0]!, pair[1]!, viewport); render(); event.currentTarget.setPointerCapture(event.pointerId); return; }
+    }
+    if (panMode || spaceHeld.current || event.button === 1) { panDrag.current = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, viewport }; event.currentTarget.setPointerCapture(event.pointerId); return; }
+    if (tool === 'eyedropper') { pickColor(event); return; } if (activeLayerLocked) return; event.currentTarget.setPointerCapture(event.pointerId);
     const start = point(event); if (tool === 'move') { moveStart.current = start; moveEnd.current = start; return; }
     const shape = (['line', 'rectangle', 'ellipse', 'arrow', 'triangle'] as CanvasTool[]).includes(tool) ? tool as StrokeShape : 'freehand';
     const stroke = { id: crypto.randomUUID(), tool: tool === 'eraser' || tool === 'fill' ? tool : 'pencil', color, size, points: [start], at: 0, brush, shape, opacity: opacity / 100, smoothing: smoothing / 100 } satisfies Stroke;
     if (tool === 'fill') { commitStroke(stroke); return; } if (shape !== 'freehand') stroke.points.push(start); current.current = stroke; render();
   };
   const move = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (event.pointerType === 'touch' && touches.current.has(event.pointerId)) {
+      touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (touchGesture.current && touches.current.size >= 2) { const pair = [...touches.current.values()]; const next = gestureSnapshot(pair[0]!, pair[1]!, touchGesture.current.viewport); const start = touchGesture.current; onViewportChange?.({ zoom: clamp(start.viewport.zoom * next.distance / Math.max(1, start.distance), .25, 8), rotation: normalizeRotation(start.viewport.rotation + (next.angle - start.angle) * 180 / Math.PI), panX: start.viewport.panX + next.centerX - start.centerX, panY: start.viewport.panY + next.centerY - start.centerY }); return; }
+    }
+    if (panDrag.current?.pointerId === event.pointerId) { const start = panDrag.current; onViewportChange?.({ ...start.viewport, panX: start.viewport.panX + event.clientX - start.clientX, panY: start.viewport.panY + event.clientY - start.clientY }); return; }
     if (moveStart.current) { moveEnd.current = point(event); return; }
     if (!current.current) return; const next = point(event);
     if (current.current.shape === 'freehand' && current.current.points.length >= MAX_GESTURE_POINTS) current.current.points = sampleStrokePoints(current.current.points, Math.floor(MAX_GESTURE_POINTS / 2));
@@ -142,14 +160,21 @@ export function Canvas({ strokes, active, expert = false, layers, activeLayerId,
     send(stroke); if (symmetry === 'none' || stroke.tool === 'fill') return;
     send({ ...stroke, id: crypto.randomUUID(), points: stroke.points.map((point) => symmetry === 'vertical' ? { ...point, x: 1 - point.x } : { ...point, y: 1 - point.y }) });
   };
-  const up = () => {
+  const up = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (event.pointerType === 'touch') { touches.current.delete(event.pointerId); if (touchGesture.current) { if (touches.current.size < 2) touchGesture.current = null; current.current = null; render(); return; } }
+    if (panDrag.current?.pointerId === event.pointerId) { panDrag.current = null; return; }
     if (moveStart.current && moveEnd.current) { onLayerTranslate?.(moveEnd.current.x - moveStart.current.x, moveEnd.current.y - moveStart.current.y); moveStart.current = null; moveEnd.current = null; return; }
     if (!current.current) return; const stroke = current.current; current.current = null; commitStroke(stroke);
   };
   const chooseBrush = (value: BrushStyle) => { setBrush(value); setTool('pencil'); };
   const saveCustomColor = () => setCustomColors((items) => items.includes(color.toLowerCase()) || items.length >= 24 ? items : [...items, color.toLowerCase()]);
+  const wheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!active || !onViewportChange || !(event.target instanceof Node) || !boardRef.current?.contains(event.target)) return; event.preventDefault();
+    if (event.shiftKey) { onViewportChange({ ...viewport, rotation: normalizeRotation(viewport.rotation + (event.deltaY > 0 ? 5 : -5)) }); return; }
+    const factor = Math.exp(-event.deltaY * .0015); onViewportChange({ ...viewport, zoom: clamp(viewport.zoom * factor, .25, 8) });
+  };
 
-  return <div className={`canvas-shell ${active ? 'is-active' : ''} ${expert ? 'has-expert-tools' : ''} ${activeLayerLocked ? 'layer-is-locked' : ''}`}>
+  return <div className={`canvas-shell ${active ? 'is-active' : ''} ${expert ? 'has-expert-tools' : ''} ${expertPanelCollapsed ? 'expert-is-collapsed' : ''} ${panMode ? 'viewport-pan-mode' : ''} ${activeLayerLocked ? 'layer-is-locked' : ''}`} onWheel={wheel}>
     {active && <div className={`tool-rail ${expert ? 'pro-tool-rail' : ''}`} aria-label="Drawing tools">
       <button className={tool === 'pencil' ? 'selected' : ''} onClick={() => setTool('pencil')} title="Brush (B)">✎<small>brush</small></button>
       <button className={tool === 'eraser' ? 'selected' : ''} onClick={() => setTool('eraser')} title="Eraser (E)">⌫<small>eraser</small></button>
@@ -166,7 +191,7 @@ export function Canvas({ strokes, active, expert = false, layers, activeLayerId,
       <span className="rail-line"/><button onClick={onUndo} title="Undo (Ctrl/Cmd + Z)">↶<small>undo</small></button><button onClick={onClear}>×<small>clear</small></button>
     </div>}
     {active && expert && <aside id="studio-expert-panel" className="expert-panel" aria-label="Expert brush controls">
-      <header><div><small>ULTIMATE UTENSILS</small><b>{tool === 'pencil' ? BRUSHES.find((item) => item.id === brush)?.label : tool}</b></div><span>FREE</span></header>
+      <header><div><small>ULTIMATE UTENSILS</small><b>{tool === 'pencil' ? BRUSHES.find((item) => item.id === brush)?.label : tool}</b></div><span>FREE</span><button className="panel-collapse-button" onClick={onToggleExpertPanel} aria-label="Collapse brush controls" title="Collapse brush controls">‹</button></header>
       <section><label>BRUSH LIBRARY</label><div className="brush-library">{BRUSHES.map((item) => <button className={tool === 'pencil' && brush === item.id ? 'active' : ''} onClick={() => chooseBrush(item.id)} key={item.id}><i className={`brush-mark ${item.id}`}/><span><b>{item.label}</b><small>{item.detail}</small></span></button>)}</div></section>
       <section className="palette-section"><label>COLOR PALETTE</label><div className="pro-colors"><input type="color" value={color} onChange={(event) => { setColor(event.target.value); setTool('pencil'); }} aria-label="Custom brush color"/><code>{color.toUpperCase()}</code><button onClick={saveCustomColor} disabled={customColors.length >= 24 || customColors.includes(color.toLowerCase())}>＋ SAVE</button></div><small className="palette-label">8 ESSENTIALS</small><div className="swatches">{COMMON_COLORS.map((value) => <button aria-label={`Use ${value}`} className={color.toLowerCase() === value ? 'selected' : ''} style={{ background: value }} onClick={() => { setColor(value); setTool('pencil'); }} key={value}/>)}</div><div className="custom-palette-heading"><small>MY COLORS</small><b>{customColors.length}/24</b></div><div className="custom-palette">{customColors.map((value) => <div className="custom-swatch" key={value}><button aria-label={`Use saved color ${value}`} className={color.toLowerCase() === value ? 'selected' : ''} style={{ background: value }} onClick={() => { setColor(value); setTool('pencil'); }}/><button className="remove-custom" aria-label={`Remove saved color ${value}`} onClick={() => setCustomColors((items) => items.filter((item) => item !== value))}>×</button></div>)}{!customColors.length && <span>Save any picker color here.</span>}</div></section>
       <section className="pro-sliders"><label>SIZE <b>{size}px</b><input type="range" min="1" max="160" value={size} onChange={(event) => setSize(Number(event.target.value))}/></label>
@@ -175,10 +200,25 @@ export function Canvas({ strokes, active, expert = false, layers, activeLayerId,
       <section className="canvas-assists"><label>CANVAS ASSISTS</label><button className={showGrid ? 'active' : ''} onClick={() => setShowGrid((value) => !value)}># Grid</button><button className={symmetry !== 'none' ? 'active' : ''} onClick={() => setSymmetry((value) => value === 'none' ? 'vertical' : value === 'vertical' ? 'horizontal' : 'none')}>↔ {symmetry === 'none' ? 'Symmetry off' : `${symmetry} symmetry`}</button></section>
       <footer><span>B</span> brush <span>V</span> move <span>E</span> erase <span>I</span> sample <span>⌘Z</span> undo</footer>
     </aside>}
-    <div className={`canvas-board ${showGrid ? 'show-grid' : ''}`} ref={boardRef} style={expert ? { aspectRatio: `${width} / ${height}` } : undefined}><canvas ref={canvasRef} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} aria-label={active ? 'Drawing canvas' : 'Live drawing'} />{showGrid && <div className="canvas-grid" aria-hidden="true"/>}{symmetry !== 'none' && <div className={`symmetry-guide ${symmetry}`} aria-hidden="true"/>}{activeLayerLocked && <div className="canvas-lock-badge">▣ LAYER LOCKED</div>}{expert && <div className="canvas-dimensions" aria-hidden="true">{width} × {height}</div>}</div>
+    {active && expert && expertPanelCollapsed && <button className="expert-panel-tab" onClick={onToggleExpertPanel} aria-label="Open brush controls"><span>✎</span><b>UTENSILS</b></button>}
+    <div className={`canvas-board ${showGrid ? 'show-grid' : ''}`} ref={boardRef} style={expert ? { aspectRatio: `${width} / ${height}`, transform: `translate(${viewport.panX}px, ${viewport.panY}px) rotate(${viewport.rotation}deg) scale(${viewport.zoom})` } : undefined}><canvas ref={canvasRef} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} aria-label={active ? 'Drawing canvas' : 'Live drawing'} />{showGrid && <div className="canvas-grid" aria-hidden="true"/>}{symmetry !== 'none' && <div className={`symmetry-guide ${symmetry}`} aria-hidden="true"/>}{activeLayerLocked && <div className="canvas-lock-badge">▣ LAYER LOCKED</div>}{expert && <div className="canvas-dimensions" aria-hidden="true">{width} × {height}</div>}</div>
     {active && !expert && <div className="canvas-controls"><div className="swatches">{COMMON_COLORS.map((value) => <button aria-label={`Use ${value}`} className={color.toLowerCase() === value ? 'selected' : ''} style={{ background: value }} onClick={() => { setColor(value); setTool('pencil'); }} key={value}/>)}</div><label>Stroke <input type="range" min="2" max="18" value={size} onChange={(event) => setSize(Number(event.target.value))}/><b>{size}</b></label></div>}
   </div>;
 }
+
+export function screenToCanvasCoordinates(clientX: number, clientY: number, centerX: number, centerY: number, boardWidth: number, boardHeight: number, viewport: CanvasViewport): { x: number; y: number } {
+  const dx = clientX - centerX; const dy = clientY - centerY; const radians = -viewport.rotation * Math.PI / 180;
+  const rotatedX = dx * Math.cos(radians) - dy * Math.sin(radians); const rotatedY = dx * Math.sin(radians) + dy * Math.cos(radians);
+  return { x: clamp((rotatedX / viewport.zoom + boardWidth / 2) / boardWidth, 0, 1), y: clamp((rotatedY / viewport.zoom + boardHeight / 2) / boardHeight, 0, 1) };
+}
+
+function screenToCanvasPoint(clientX: number, clientY: number, board: HTMLDivElement, viewport: CanvasViewport): { x: number; y: number } {
+  const rect = board.getBoundingClientRect(); return screenToCanvasCoordinates(clientX, clientY, rect.left + rect.width / 2, rect.top + rect.height / 2, board.clientWidth, board.clientHeight, viewport);
+}
+
+function gestureSnapshot(first: { x: number; y: number }, second: { x: number; y: number }, viewport: CanvasViewport) { return { distance: Math.hypot(second.x - first.x, second.y - first.y), angle: Math.atan2(second.y - first.y, second.x - first.x), centerX: (first.x + second.x) / 2, centerY: (first.y + second.y) / 2, viewport }; }
+function clamp(value: number, minimum: number, maximum: number): number { return Math.max(minimum, Math.min(maximum, value)); }
+function normalizeRotation(value: number): number { return ((value + 180) % 360 + 360) % 360 - 180; }
 
 function drawStroke(context: CanvasRenderingContext2D, stroke: Stroke, width: number, height: number, ratio: number, layered: boolean) {
   if (!stroke.points.length) return; context.save();
