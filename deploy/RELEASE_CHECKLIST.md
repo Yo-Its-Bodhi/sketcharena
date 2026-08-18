@@ -9,11 +9,12 @@ Every public deployment must be traceable to a reviewed Git commit. Never build 
 3. Record the full commit SHA and set it as `RELEASE_SHA` in the server environment.
 4. Before the first PostgreSQL cutover, run `npm run ops:backup` against the stopped legacy JSON files and preserve its verified manifest off-host.
 5. Run `npm run ops:backup:postgres`, verify the custom-format dump with `pg_restore --list`, and record the off-host/PITR checkpoint.
-6. Run `npm run db:migrate` with the release environment. The runner must verify every applied migration checksum without drift.
-7. For the first database cutover only, run `npm run db:import:legacy` while the old service is stopped. Preserve its per-source hashes; a changed previously imported source must be rejected.
-8. Run another `npm run ops:backup:postgres` after import and verify representative account, artwork, progression, mint, promotion and report counts.
-9. Build with `npm ci` followed by `npm run check`, `npm run qa:load` and `npm run contract:compile`.
-10. If contract code changed, also run `npm run contract:test:ci`; never deploy a contract from this checklist.
+6. On the approved recovery host, have a PostgreSQL administrator create one `sketch_arena_restore_drill_YYYYMMDDHHMMSS_HEX` database owned by the application role. Run `npm run ops:restore:drill -- --backup <verified-directory> --database <drill-database> --precreated`; require all representative-domain checks and automatic removal to pass. Never grant `CREATEDB` to the application role.
+7. Run `npm run db:migrate` with the release environment. The runner must verify every applied migration checksum without drift.
+8. For the first database cutover only, run `npm run db:import:legacy` while the old service is stopped. Preserve its per-source hashes; a changed previously imported source must be rejected.
+9. Run another `npm run ops:backup:postgres` after import and verify representative account, artwork, progression, mint, promotion and report counts.
+10. Build with `npm ci` followed by `npm run check`, `npm run qa:load` and `npm run contract:compile`.
+11. If contract code changed, also run `npm run contract:test:ci`; never deploy a contract from this checklist.
 
 ## Deployment
 

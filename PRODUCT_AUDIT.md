@@ -47,6 +47,8 @@ Manual browser QA completed on 2026-08-16 against the running local client/serve
 
 The production operations pass now adds separate liveness/readiness probes, an immediately observable draining state, idempotent shutdown coordination, fatal-process handling, correlated one-line JSON request/lifecycle logs, and a tested same-host proxy trust boundary so Nginx users do not share one rate-limit identity. Example hardened Nginx and systemd configurations are included under `deploy/`.
 
+The 2026-08-18 recovery drill went beyond checksum inspection: the latest verified production dump restored all 10 migrations plus accounts, Vault artwork, mint records, progression, promotions, moderation and leaderboard tables into a uniquely named temporary database. Representative aggregate counts passed and the database was removed. The application role remained least-privilege and could not create databases; PostgreSQL administration created only the isolated target and transferred ownership for the drill.
+
 The contract-admin completion audit corrected and regression-tested the exact `setRecipientApproved(address,bool)` selector used by Backstage. All three prepared owner-wallet actions—recipient block, recipient approval and global allowlist policy—are now decoded in tests against the Solidity contract’s real function names rather than assumed from UI labels.
 
 ## What is already strong

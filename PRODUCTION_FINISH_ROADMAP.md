@@ -62,6 +62,7 @@ The Panic Pass is the seasonal progression track. Players earn XP through comple
 - [x] PostgreSQL-backed production domains, migrations, health endpoints, structured logs, backup verification and systemd/Nginx deployment shape.
 - [x] Browser smoke coverage for entry, Lobby, nine-deck setup, Studio controls, save/start-fresh and Vault persistence.
 - [x] Automated lint, production builds, server/web tests, operations tests and contract tests.
+- [x] Production PostgreSQL backup restored into an isolated temporary database, validated across every durable domain and removed without granting the application database-creation privilege.
 - [x] Push the leaderboard/reward/pass release and deploy only `/opt/sketch-arena/current`.
 - [x] Confirm the live release SHA and health for the isolated production release; automated primary-flow and responsive gates pass on the same source.
 - [x] Verify the deployed collection, paid canary receipt, public Archive indexing, NFTStudio collection approval and public indexer handoff. Exact evidence lives in `PANIC_ARCHIVE_MAINNET_EVIDENCE.md`.
