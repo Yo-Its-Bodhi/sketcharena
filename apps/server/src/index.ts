@@ -329,7 +329,7 @@ app.get('/api/artworks', async (request, response) => {
   return response.json((await artwork.listByOwner(ownerSessionId)).map(withMarketplaceUrl));
 });
 const rewardFields = {
-  kind: z.enum(['mint-credit', 'mint-discount', 'xp', 'item', 'achievement', 'battle-pass']), amount: z.number().int().min(1).max(100_000),
+  kind: z.enum(['mint-credit', 'mint-discount', 'xp', 'item', 'achievement']), amount: z.number().int().min(1).max(100_000),
   discountBps: z.number().int().min(100).max(10_000).optional(),
   itemId: z.string().trim().min(2).max(80).optional(), reason: z.string().trim().min(3).max(240),
   campaignId: z.string().trim().min(2).max(80).optional(), expiresAt: z.number().int().positive().optional(),

@@ -134,6 +134,8 @@ describe('Socket.IO authoritative transport lifecycle', () => {
     const reportAck = await new Promise<{ ok: boolean; data?: { reportId: string }; error?: string }>((resolve) => bob.emit('player:report', { playerId: alicePlayer.id, category: 'harassment', detail: 'Repeated targeted abuse during the room chat.' }, resolve));
     expect(reportAck.ok).toBe(true); expect(reportAck.data?.reportId).toMatch(/^[0-9a-f-]{36}$/i);
     const staffHeaders = { authorization: `Bearer ${backstageToken}`, 'content-type': 'application/json' };
+    const closedPremium = await fetch(`${origin}/api/admin/grants`, { method: 'POST', headers: staffHeaders, body: JSON.stringify({ kind: 'battle-pass', amount: 1, reason: 'Season 0 must stay free', sessionIds: [aliceSession.data!.sessionId], idempotencyKey: 'closed-season-zero-premium' }) });
+    expect(closedPremium.status).toBe(400); expect(await closedPremium.json()).toMatchObject({ error: 'Reward grant is invalid' });
     const reportResponse = await fetch(`${origin}/api/admin/reports`, { headers: staffHeaders });
     expect(reportResponse.status).toBe(200); const reportList = await reportResponse.json() as ModerationReport[];
     expect(reportList[0]).toMatchObject({ id: reportAck.data!.reportId, reporterName: 'Bob', targetName: 'Alice', status: 'open' });
