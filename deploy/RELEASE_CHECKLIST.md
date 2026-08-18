@@ -20,8 +20,9 @@ Every public deployment must be traceable to a reviewed Git commit. Never build 
 
 1. Create a new versioned release directory instead of overwriting the active release.
 2. Install production packages from `package-lock.json` and copy the already-tested web/server build output.
-3. Point the service symlink or working directory to the new release.
-4. Restart the supervised service and leave the previous release intact for rollback.
+3. Run the release with the checksum-verified active Node LTS binary under `/opt/sketch-arena/runtime/node-lts`; never replace the system Node used by unrelated VPS services.
+4. Point the service symlink or working directory to the new release.
+5. Restart the supervised service and leave the previous release and prior runtime intact for rollback.
 
 ## Required smoke evidence
 
