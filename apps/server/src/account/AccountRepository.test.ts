@@ -12,9 +12,17 @@ describe('AccountService', () => {
     const first = await service.migrateLegacy(credential, 'Dru', 'Chrome · Windows', 10_000);
     const again = await service.migrateLegacy(credential, 'Dru Two', 'Phone', 10_100);
     expect(first.account.id).toBe('271a413b-d339-4570-9fdc-eaec41f14f11');
-    expect(again.account.id).toBe(first.account.id);
+    expect(again.account).toMatchObject({ id: first.account.id, name: 'Dru' });
     expect(await service.fromSessionToken(first.token, 10_999)).toMatchObject({ account: { id: first.account.id }, session: { label: 'Chrome · Windows' } });
     expect(await service.fromSessionToken(first.token, 11_001)).toBeNull();
+  });
+
+  it('claims names case-insensitively and never lets login payloads rename an account', async () => {
+    const repository = new MemoryAccountRepository(); const service = new AccountService(repository);
+    const owner = await service.migrateLegacy('1'.repeat(64), '  Bodhi  ', 'Owner browser', 50_000);
+    await expect(service.migrateLegacy('2'.repeat(64), 'bodhi', 'Impostor browser', 50_001)).rejects.toThrow('already claimed');
+    const resumed = await service.migrateLegacy('1'.repeat(64), 'Not Bodhi', 'Second owner device', 50_002);
+    expect(owner.account.name).toBe('Bodhi'); expect(resumed.account.name).toBe('Bodhi');
   });
 
   it('stores only hashes of recovery and device secrets', async () => {

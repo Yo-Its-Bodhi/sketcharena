@@ -57,6 +57,7 @@ interface AccountState {
 
 export interface AccountRepository {
   findAccount(id: string): Promise<PlayerAccount | null>;
+  findByNameKey(nameKey: string): Promise<PlayerAccount | null>;
   findByLegacyCredentialHash(hash: string): Promise<PlayerAccount | null>;
   findByPasskeyId(id: string): Promise<{ account: PlayerAccount; passkey: PlayerPasskey } | null>;
   saveAccount(account: PlayerAccount): Promise<void>;
@@ -81,6 +82,7 @@ abstract class StatefulAccountRepository implements AccountRepository {
     const result = this.queue.then(operation, operation); this.queue = result.then(() => undefined, () => undefined); return result;
   }
   async findAccount(id: string): Promise<PlayerAccount | null> { return structuredClone((await this.readState()).accounts.find((item) => item.id === id) ?? null); }
+  async findByNameKey(nameKey: string): Promise<PlayerAccount | null> { return structuredClone((await this.readState()).accounts.find((item) => playerNameKey(item.name) === nameKey) ?? null); }
   async findByLegacyCredentialHash(hash: string): Promise<PlayerAccount | null> { return structuredClone((await this.readState()).accounts.find((item) => item.legacyCredentialHash === hash) ?? null); }
   async findByPasskeyId(id: string): Promise<{ account: PlayerAccount; passkey: PlayerPasskey } | null> {
     const state = await this.readState(); const passkey = state.passkeys.find((item) => item.id === id); if (!passkey) return null;
@@ -131,7 +133,10 @@ export class AccountService {
   async migrateLegacy(credential: string, name: string, label: string, now = Date.now()): Promise<{ account: PlayerAccount; token: string; session: PlayerDeviceSession }> {
     const legacyCredentialHash = hashSecret(credential.toLowerCase());
     const existing = await this.repository.findByLegacyCredentialHash(legacyCredentialHash);
-    const account: PlayerAccount = existing ? { ...existing, name, updatedAt: now } : { id: legacyAccountId(credential), name, legacyCredentialHash, createdAt: now, updatedAt: now };
+    const canonicalName = canonicalPlayerName(name);
+    const claimed = await this.repository.findByNameKey(playerNameKey(canonicalName));
+    if (!existing && claimed) throw new Error('That name is already claimed. Sign in to its account or choose another.');
+    const account: PlayerAccount = existing ?? { id: legacyAccountId(credential), name: canonicalName, legacyCredentialHash, createdAt: now, updatedAt: now };
     await this.repository.saveAccount(account);
     const token = createSecret(); const session: PlayerDeviceSession = { id: randomUUID(), accountId: account.id, tokenHash: hashSecret(token), label: label.slice(0, 80), createdAt: now, lastSeenAt: now, expiresAt: now + this.sessionTtlMs };
     await this.repository.saveSession(session); return { account, token, session };
@@ -147,6 +152,9 @@ export class AccountService {
   }
   consumeChallenge(id: string, kind: AccountChallenge['kind'], now = Date.now()): Promise<AccountChallenge | null> { return this.repository.consumeChallenge(id, kind, now); }
 }
+
+export function canonicalPlayerName(value: string): string { return value.normalize('NFKC').trim().replace(/\s+/g, ' '); }
+export function playerNameKey(value: string): string { return canonicalPlayerName(value).toLocaleLowerCase('en-US'); }
 
 function legacyAccountId(credential: string): string {
   const hex = createHash('sha256').update(credential).digest('hex').slice(0, 32).split(''); hex[12] = '4'; hex[16] = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16); const value = hex.join('');

@@ -136,7 +136,7 @@ export function ensurePlayerInState(state: ProgressionState, sessionId: string, 
     existing.lastSeenAt = now;
     normalizePlayer(existing);
     ensureFirstMintCredit(existing, now);
-    ensureFoundingSeasonOnePass(existing, now);
+    ensureFoundingSeasonOnePass(existing);
     applySeasonLevelRewards(existing, now);
     return existing;
   }
@@ -145,17 +145,15 @@ export function ensurePlayerInState(state: ProgressionState, sessionId: string, 
     firstSeenAt: now, lastSeenAt: now,
   };
   ensureFirstMintCredit(player, now);
-  ensureFoundingSeasonOnePass(player, now);
+  ensureFoundingSeasonOnePass(player);
   state.players.push(player); return player;
 }
 
-function ensureFoundingSeasonOnePass(player: PlayerProgress, now: number): void {
+function ensureFoundingSeasonOnePass(player: PlayerProgress): void {
   const entitlement = 'season-1-premium';
   if (!player.passEntitlements.includes(entitlement)) player.passEntitlements.push(entitlement);
   const campaignId = 'season-0-founding-weirdos-season-1-premium';
-  if (player.rewards.some((reward) => reward.campaignId === campaignId)) return;
-  player.rewards.push({ id: randomUUID(), kind: 'battle-pass', amount: 1, itemId: entitlement,
-    reason: 'Founding Weirdo reward · your Season 1 Premium Panic Pass is free.', campaignId, grantedAt: now });
+  player.rewards = player.rewards.filter((reward) => reward.campaignId !== campaignId);
 }
 
 function ensureFirstMintCredit(player: PlayerProgress, now: number): void {

@@ -30,7 +30,7 @@ const normalizedExpected = normalizeImmutables(artifact.deployedBytecode, artifa
 const checks = {
   chainId: chainId === 9008, exactReviewedRuntime: normalizedActual === normalizedExpected, owner: owner === expected.owner, mintSigner: mintSigner === expected.mintSigner,
   payoutReceiver: payoutReceiver === expected.payoutReceiver, paymentToken: paymentToken === expected.paymentToken, unlimitedSupply: maxSupply === maxUint256,
-  unlimitedTokenCap: maxMintPrice === maxUint256, artistRoyalty: artistRoyaltyBps === 500, collectionURI: collectionURI === expected.collectionURI,
+  unlimitedTokenCap: maxMintPrice === maxUint256, artistRoyalty: artistRoyaltyBps === 500n, collectionURI: collectionURI === expected.collectionURI,
   startsPaused: paused === true, openVoucherPolicy: allowlistRequired === false, noMintsYet: nextTokenId === 1n, identity: name === 'Sketch Arena: The Panic Archive' && symbol === 'PANIC',
 };
 console.log(JSON.stringify({ ready: Object.values(checks).every(Boolean), address, checks, state: { owner, mintSigner, payoutReceiver, paymentToken, maxSupply: maxSupply.toString(), maxMintPrice: maxMintPrice.toString(), artistRoyaltyBps: Number(artistRoyaltyBps), collectionURI, paused, allowlistRequired, nextTokenId: nextTokenId.toString(), name, symbol }, evidence: { sourceSha256: artifact.sourceSha256, evmVersion: artifact.evmVersion, runtimeBytes: code ? (code.length - 2) / 2 : 0, normalizedRuntimeSha256: createHash('sha256').update(normalizedActual).digest('hex') } }, null, 2));

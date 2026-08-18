@@ -90,6 +90,8 @@ describe('Socket.IO authoritative transport lifecycle', () => {
     const cookie = migrated.headers.getSetCookie()[0]?.split(';')[0]; expect(cookie).toMatch(/^sketch_session=/);
     const accountResponse = await fetch(`${origin}/api/account`, { headers: { cookie: cookie! } });
     expect(accountResponse.status).toBe(200); expect(await accountResponse.json()).toMatchObject({ id: account.id, name: 'Cookie Player', passkeyCount: 0 });
+    const duplicate = await fetch(`${origin}/api/account/migrate`, { method: 'POST', headers: { authorization: `Bearer ${'d'.repeat(64)}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'cookie player', deviceLabel: 'Impostor browser' }) });
+    expect(duplicate.status).toBe(409); expect(await duplicate.json()).toMatchObject({ error: expect.stringContaining('already claimed') });
     const options = await fetch(`${origin}/api/account/passkeys/register/options`, { method: 'POST', headers: { cookie: cookie! } });
     expect(options.status).toBe(200); expect(await options.json()).toMatchObject({ options: { rp: { id: '127.0.0.1' }, authenticatorSelection: { residentKey: 'required', userVerification: 'required' } } });
     const player = await connect(origin, cookie); sockets.push(player);
@@ -99,9 +101,11 @@ describe('Socket.IO authoritative transport lifecycle', () => {
 
   it('joins two players, replaces a duplicate tab, rejects stale actions, and migrates the host', async () => {
     const aliceCredential = 'a'.repeat(64); const bobCredential = 'b'.repeat(64);
-    const alice = await connect(origin); const bob = await connect(origin); sockets.push(alice, bob);
-    const aliceSession = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => alice.emit('session:resume', { credential: aliceCredential, name: 'Alice' }, resolve));
-    const bobSession = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => bob.emit('session:resume', { credential: bobCredential, name: 'Bob' }, resolve));
+    const migrate = async (credential: string, name: string) => { const response = await fetch(`${origin}/api/account/migrate`, { method: 'POST', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: JSON.stringify({ name, deviceLabel: `${name} browser` }) }); expect(response.status).toBe(201); return response.headers.getSetCookie()[0]?.split(';')[0]; };
+    const aliceCookie = await migrate(aliceCredential, 'Alice'); const bobCookie = await migrate(bobCredential, 'Bob');
+    const alice = await connect(origin, aliceCookie); const bob = await connect(origin, bobCookie); sockets.push(alice, bob);
+    const aliceSession = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => alice.emit('session:resume', { name: 'Not Alice' }, resolve));
+    const bobSession = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => bob.emit('session:resume', { name: 'Not Bob' }, resolve));
     expect(aliceSession.ok).toBe(true); expect(bobSession.ok).toBe(true);
 
     const created = await new Promise<{ ok: boolean; data?: { room: RoomView }; error?: string }>((resolve) => alice.emit('room:create', { name: 'Transport Test', category: 'chaos', isPrivate: false, maxPlayers: 4, roundSeconds: 30 }, resolve));
@@ -124,8 +128,8 @@ describe('Socket.IO authoritative transport lifecycle', () => {
     const reviewedResponse = await fetch(`${origin}/api/admin/reports/${reportAck.data!.reportId}/status`, { method: 'POST', headers: staffHeaders, body: JSON.stringify({ status: 'resolved', resolutionNote: 'Reviewed by the integration moderator.' }) });
     expect(reviewedResponse.status).toBe(200); expect(await reviewedResponse.json()).toMatchObject({ status: 'resolved', handledBy: 'backstage:test-moderator' });
 
-    const replacement = await connect(origin); sockets.push(replacement); const replacementState = nextRoomState(replacement);
-    const resumed = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => replacement.emit('session:resume', { credential: aliceCredential, name: 'Alice' }, resolve));
+    const replacement = await connect(origin, aliceCookie); sockets.push(replacement); const replacementState = nextRoomState(replacement);
+    const resumed = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => replacement.emit('session:resume', { name: 'Definitely Not Alice' }, resolve));
     expect(resumed.ok).toBe(true); expect((await replacementState).players.find((player) => player.name === 'Alice')?.connected).toBe(true);
 
     const staleAction = await new Promise<{ ok: boolean; error?: string }>((resolve) => alice.emit('chat:send', { text: 'stale tab speaking' }, resolve));

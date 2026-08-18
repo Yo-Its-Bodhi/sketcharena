@@ -9,11 +9,10 @@ import { z } from 'zod';
 import type { ClientToServerEvents, MatchResult, ServerToClientEvents, Stroke } from '@sketch-arena/protocol';
 import { FileArtworkRepository, MemoryArtworkRepository, toPanicArchiveItem } from './artwork/ArtworkRepository.js';
 import { GAME, GameRoom } from './game/GameRoom.js';
-import { FileProgressionRepository, MemoryProgressionRepository, SEASON_ITEMS } from './progression/ProgressionRepository.js';
+import { FileProgressionRepository, MemoryProgressionRepository, SEASON_ITEMS, type PlayerProgress } from './progression/ProgressionRepository.js';
 import { FileMintRepository, MemoryMintRepository } from './mint/MintRepository.js';
 import { MintService, MintServiceError, loadMintConfiguration } from './mint/MintService.js';
 import { SlidingLimit } from './rateLimit.js';
-import { sessionFromAuthorization, sessionIdFromCredential } from './sessionIdentity.js';
 import { BackstageAuth, type BackstageRole } from './backstageAuth.js';
 import { FilePromotionRepository, MemoryPromotionRepository, PromotionService } from './promotion/PromotionRepository.js';
 import { errorFields, log } from './logger.js';
@@ -179,10 +178,15 @@ app.use('/api', (request, response, next) => {
 app.post('/api/account/migrate', async (request, response) => {
   const credential = legacyCredentialFromAuthorization(request.headers.authorization); if (!credential) return response.status(401).json({ error: 'Recovery credential required' });
   const parsed = accountMigrationSchema.safeParse(request.body); if (!parsed.success) return response.status(400).json({ error: 'Account migration request is invalid' });
-  const migrated = await accounts.migrateLegacy(credential, parsed.data.name, parsed.data.deviceLabel);
-  setPlayerCookie(response, migrated.token, migrated.session.expiresAt);
-  log('info', 'account.legacy_migrated', { accountId: migrated.account.id, sessionId: migrated.session.id });
-  return response.status(201).json(publicAccount(migrated.account, migrated.session.id));
+  try {
+    const migrated = await accounts.migrateLegacy(credential, parsed.data.name, parsed.data.deviceLabel);
+    setPlayerCookie(response, migrated.token, migrated.session.expiresAt);
+    log('info', 'account.legacy_migrated', { accountId: migrated.account.id, sessionId: migrated.session.id });
+    return response.status(201).json(publicAccount(migrated.account, migrated.session.id));
+  } catch (error) {
+    const message = error instanceof Error && /name.*claimed/i.test(error.message) ? error.message : 'That name could not be claimed';
+    return response.status(409).json({ error: message });
+  }
 });
 app.get('/api/account', async (request, response) => {
   const authenticated = await playerAccountFromRequest(request); if (!authenticated) return response.status(401).json({ error: 'Player authentication required' });
@@ -282,7 +286,7 @@ app.get('/api/progression', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request);
   if (!ownerSessionId) return response.status(401).json({ error: 'Player authentication required' });
   const player = await progression.getPlayer(ownerSessionId);
-  return player ? response.json(player) : response.status(404).json({ error: 'Player profile not found' });
+  return player ? response.json(publicProgression(player)) : response.status(404).json({ error: 'Player profile not found' });
 });
 app.get('/api/season/items', (_request, response) => response.json(SEASON_ITEMS));
 app.get('/api/leaderboards', async (request, response) => {
@@ -292,7 +296,7 @@ app.get('/api/leaderboards', async (request, response) => {
 app.post('/api/progression/equip', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request); if (!ownerSessionId) return response.status(401).json({ error: 'Player authentication required' });
   const parsed = equipItemSchema.safeParse(request.body); if (!parsed.success) return response.status(400).json({ error: 'Cosmetic selection is invalid' });
-  try { return response.json(await progression.equipItem(ownerSessionId, parsed.data.itemId)); }
+  try { return response.json(publicProgression(await progression.equipItem(ownerSessionId, parsed.data.itemId))); }
   catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'Cosmetic could not be equipped' }); }
 });
 app.post('/api/progression/rewards/:rewardId/acknowledge', async (request, response) => {
@@ -300,7 +304,7 @@ app.post('/api/progression/rewards/:rewardId/acknowledge', async (request, respo
   if (!ownerSessionId) return response.status(401).json({ error: 'Player authentication required' });
   const rewardId = z.string().uuid().safeParse(request.params.rewardId);
   if (!rewardId.success) return response.status(400).json({ error: 'Reward ID is invalid' });
-  try { return response.json(await progression.acknowledge(ownerSessionId, rewardId.data)); }
+  try { return response.json(publicProgression(await progression.acknowledge(ownerSessionId, rewardId.data))); }
   catch { return response.status(404).json({ error: 'Reward not found' }); }
 });
 app.get('/api/artworks', async (request, response) => {
@@ -437,13 +441,17 @@ io.on('connection', (socket) => {
     const device = await accounts.fromSessionToken(cookieValue(socket.handshake.headers.cookie, SESSION_COOKIE));
     if (device) {
       sessionId = device.account.id;
-      if (device.account.name !== parsed.data.name) await accountRepository.saveAccount({ ...device.account, name: parsed.data.name, updatedAt: Date.now() });
-    } else if (parsed.data.credential) sessionId = sessionIdFromCredential(parsed.data.credential);
+      playerName = device.account.name;
+    } else if (parsed.data.credential) {
+      const legacyAccount = await accounts.fromLegacyCredential(parsed.data.credential);
+      if (!legacyAccount) return ack({ ok: false, error: 'Your player session expired—restore this Vault or choose a new name' });
+      sessionId = legacyAccount.id;
+      playerName = legacyAccount.name;
+    }
     else return ack({ ok: false, error: 'Your player session expired—sign in again' });
-    playerName = parsed.data.name;
     try { equipped = (await progression.ensurePlayer(sessionId, playerName)).equipped; }
     catch { return ack({ ok: false, error: 'Could not load your player profile' }); }
-    ack({ ok: true, data: { sessionId } });
+    ack({ ok: true, data: { sessionId, name: playerName } });
     for (const room of rooms.values()) {
       if (!room.hasSession(sessionId)) continue;
       const replacedSocketId = room.socketIdForSession(sessionId);
@@ -623,13 +631,17 @@ async function playerAccountFromRequest(request: express.Request) {
   return accounts.fromSessionToken(cookieValue(request.headers.cookie, SESSION_COOKIE));
 }
 async function playerIdFromRequest(request: express.Request): Promise<string | null> {
-  const account = await playerAccountFromRequest(request); return account?.account.id ?? sessionFromAuthorization(request.headers.authorization);
+  const account = await playerAccountFromRequest(request); return account?.account.id ?? null;
 }
 function setPlayerCookie(response: express.Response, token: string, expiresAt: number): void {
   response.cookie(SESSION_COOKIE, token, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'lax', path: '/', expires: new Date(expiresAt), priority: 'high' });
 }
 function clearPlayerCookie(response: express.Response): void { response.clearCookie(SESSION_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'lax', path: '/' }); }
 function publicAccount(account: { id: string; name: string; securedAt?: number; createdAt: number }, sessionId: string) { return { id: account.id, name: account.name, secured: Boolean(account.securedAt), securedAt: account.securedAt, createdAt: account.createdAt, sessionId }; }
+function publicProgression(player: PlayerProgress): PlayerProgress {
+  const secretCampaign = 'season-0-founding-weirdos-season-1-premium';
+  return { ...player, passEntitlements: player.passEntitlements.filter((value) => value !== 'season-1-premium'), rewards: player.rewards.filter((reward) => reward.campaignId !== secretCampaign) };
+}
 function authorizeAdmin(authorization: string | undefined, ip: string | undefined, required: BackstageRole) {
   if (!adminLimit.take(ip ?? 'unknown')) return null;
   return backstageAuth.authorize(authorization, required);

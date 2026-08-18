@@ -30,7 +30,7 @@ describe('ProgressionRepository', () => {
     const resumed = await repository.ensurePlayer(player.sessionId, player.name);
     expect(resumed.passEntitlements).toEqual(['season-1-premium']);
     expect(resumed.battlePass).toBe('free');
-    expect(resumed.rewards.filter((reward) => reward.campaignId === 'season-0-founding-weirdos-season-1-premium')).toHaveLength(1);
+    expect(resumed.rewards.filter((reward) => reward.campaignId === 'season-0-founding-weirdos-season-1-premium')).toHaveLength(0);
   });
 
   it('updates earned progression without duplicating achievement items', async () => {

@@ -274,7 +274,7 @@ export const DRAW_LIMITS = {
 } as const;
 
 export interface ClientToServerEvents {
-  'session:resume': (payload: { credential?: string; name: string }, ack: (value: Ack<{ sessionId: string }>) => void) => void;
+  'session:resume': (payload: { credential?: string; name: string }, ack: (value: Ack<{ sessionId: string; name: string }>) => void) => void;
   'rooms:subscribe': () => void;
   'room:create': (payload: { name: string; category: string; isPrivate?: boolean; maxPlayers?: number; roundSeconds?: number }, ack: (value: Ack<{ room: RoomView; inviteCode?: string }>) => void) => void;
   'room:join': (payload: { roomId?: string; inviteCode?: string }, ack: (value: Ack<{ room: RoomView }>) => void) => void;
