@@ -484,8 +484,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .round-awards > div { padding: 11px; background: white; border: 2px solid var(--ink); border-radius: 10px; }
 .round-awards small, .round-awards strong { display: block; }
 .round-awards small { font-size: 8px; letter-spacing: .1em; }
-.keep-button { width: 100%; padding: 14px; color: white; background: var(--coral); border: 3px solid var(--ink); border-radius: 12px; box-shadow: 0 5px 0 #9d291f; font-weight: 1000; }
+.keep-button { position: relative; z-index: 5; width: 100%; padding: 14px; color: white; background: var(--coral); border: 3px solid var(--ink); border-radius: 12px; box-shadow: 0 5px 0 #9d291f; font-weight: 1000; pointer-events: auto; touch-action: manipulation; }
 .keep-button:disabled { color: var(--ink); background: var(--mint); box-shadow: 0 5px 0 #267451; cursor: default; }
+.keep-error { margin-top: 10px; padding: 9px 11px; color: var(--ink); background: #ffb4a9; border: 2px solid var(--ink); border-radius: 9px; font-size: 10px; font-weight: 900; text-align: center; }
 .keep-confirmation { margin-top: 10px; padding: 9px 11px; color: var(--ink); background: var(--mint); border: 2px solid var(--ink); border-radius: 9px; font-size: 10px; font-weight: 900; text-align: center; }
 .text-button { margin-top: 13px; border: 0; background: none; font-weight: 900; }
 
@@ -604,7 +605,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 }
 
 /* Pass two: Sketch Arena's own game-show/sketchbook identity */
-.toast-error { position: fixed; z-index: 60; left: 50%; bottom: 28px; transform: translateX(-50%); max-width: min(520px, calc(100vw - 28px)); padding: 13px 18px; color: var(--ink); background: #ffb4a9; border: 3px solid var(--ink); border-radius: 13px; box-shadow: 0 7px 0 #9d291f, 0 20px 40px rgba(0,0,0,.35); font-weight: 700; }
+.toast-error { position: fixed; z-index: 160; left: 50%; bottom: 28px; transform: translateX(-50%); max-width: min(520px, calc(100vw - 28px)); padding: 13px 18px; color: var(--ink); background: #ffb4a9; border: 3px solid var(--ink); border-radius: 13px; box-shadow: 0 7px 0 #9d291f, 0 20px 40px rgba(0,0,0,.35); font-weight: 700; }
 .toast-error b { margin-right: 7px; font-family: 'Archivo Black'; }
 .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--coral); box-shadow: 0 0 0 4px rgba(255,95,70,.17); animation: live-pulse 1.4s ease-out infinite; }
 @keyframes live-pulse { 60% { box-shadow: 0 0 0 9px rgba(255,95,70,0); } }
@@ -1047,9 +1048,10 @@ button.play-path:hover { transform: translateY(-6px) rotate(-.5deg); box-shadow:
 .waiting-mascots .chaos-face:nth-child(3) { animation-delay: -1.3s; }
 @keyframes audience-bob { to { transform: translateY(-8px) rotate(3deg); } }
 
-.reveal-rays { position: absolute; width: 130vmax; height: 130vmax; background: repeating-conic-gradient(from 0deg,rgba(255,212,71,.18) 0 8deg,transparent 8deg 17deg); animation: reveal-spin 35s linear infinite; }
+.reveal-rays { position: absolute; width: 130vmax; height: 130vmax; background: repeating-conic-gradient(from 0deg,rgba(255,212,71,.18) 0 8deg,transparent 8deg 17deg); animation: reveal-spin 35s linear infinite; pointer-events: none; }
 @keyframes reveal-spin { to { transform: rotate(360deg); } }
-.reveal-card-v2 { width: min(1020px,calc(100vw - 34px)); max-height: calc(100dvh - 28px); overflow-y: auto; display: grid; grid-template-columns: minmax(340px,.9fr) minmax(320px,1.1fr); gap: 25px; align-items: center; padding: 31px; text-align: left; background: linear-gradient(135deg,#ffd447,#ffbd39); }
+.reveal-card-v2 { position: relative; z-index: 1; isolation: isolate; width: min(1020px,calc(100vw - 34px)); max-height: calc(100dvh - 28px); overflow-y: auto; display: grid; grid-template-columns: minmax(340px,.9fr) minmax(320px,1.1fr); gap: 25px; align-items: center; padding: 31px; text-align: left; background: linear-gradient(135deg,#ffd447,#ffbd39); pointer-events: auto; }
+.reveal-copy { position: relative; z-index: 3; }
 .reveal-copy > span { font-size: 10px; font-weight: 1000; letter-spacing: .15em; }
 .reveal-copy h2 { margin: 7px 0 !important; font-size: clamp(47px,6vw,80px) !important; overflow-wrap: break-word; word-break: normal; }
 .reveal-copy h2.long-answer { font-size: clamp(38px,4.4vw,58px) !important; line-height: .9; }
