@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { io, type Socket } from 'socket.io-client';
-import type { ClientToServerEvents, ModerationReport, RoomView, ServerToClientEvents, Stroke } from '@sketch-arena/protocol';
+import type { ArtworkDocument, ClientToServerEvents, ModerationReport, RoomView, RoundResult, ServerToClientEvents, Stroke } from '@sketch-arena/protocol';
 
 type ArenaSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -153,4 +153,38 @@ describe('Socket.IO authoritative transport lifecycle', () => {
     expect(left.ok).toBe(true); const migrated = await bobSawMigration;
     expect(migrated.playerCount).toBe(1); expect(migrated.players[0]).toMatchObject({ name: 'Bob', isHost: true, connected: true });
   }, 10_000);
+
+  it('keeps a finished drawing after heavy room activity and advertises another public room when the first is full', async () => {
+    const createPlayer = async (credential: string, name: string) => {
+      const response = await fetch(`${origin}/api/account/migrate`, { method: 'POST', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: JSON.stringify({ name, deviceLabel: `${name} browser` }) });
+      expect(response.status).toBe(201); const cookie = response.headers.getSetCookie()[0]?.split(';')[0]; const player = await connect(origin, cookie); sockets.push(player);
+      const resumed = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => player.emit('session:resume', { name }, resolve));
+      expect(resumed.ok).toBe(true); return { player, cookie };
+    };
+    const host = await createPlayer('1'.repeat(64), 'Room Host'); const artist = await createPlayer('2'.repeat(64), 'Vault Artist'); const overflow = await createPlayer('3'.repeat(64), 'Overflow Host');
+    const created = await new Promise<{ ok: boolean; data?: { room: RoomView }; error?: string }>((resolve) => host.player.emit('room:create', { name: 'Full Public Room', category: 'chaos', isPrivate: false, maxPlayers: 2, roundSeconds: 30 }, resolve));
+    expect(created.ok).toBe(true); const roomId = created.data!.room.id;
+    const joined = await new Promise<{ ok: boolean; data?: { room: RoomView }; error?: string }>((resolve) => artist.player.emit('room:join', { roomId }, resolve));
+    expect(joined).toMatchObject({ ok: true, data: { room: { playerCount: 2, maxPlayers: 2 } } });
+    const second = await new Promise<{ ok: boolean; data?: { room: RoomView }; error?: string }>((resolve) => overflow.player.emit('room:create', { name: 'Overflow Public Room', category: 'music', isPrivate: false, maxPlayers: 8, roundSeconds: 45 }, resolve));
+    expect(second.ok).toBe(true);
+    const advertised = await (await fetch(`${origin}/api/rooms`)).json() as Array<{ id: string; playerCount: number; maxPlayers: number }>;
+    expect(advertised).toEqual(expect.arrayContaining([expect.objectContaining({ id: roomId, playerCount: 2, maxPlayers: 2 }), expect.objectContaining({ id: second.data!.room.id, playerCount: 1, maxPlayers: 8 })]));
+
+    const brief = Promise.race([
+      new Promise<{ socket: ArenaSocket; cookie: string; prompt: string }>((resolve) => host.player.once('round:brief', (value) => resolve({ socket: host.player, cookie: host.cookie!, prompt: value.prompt }))),
+      new Promise<{ socket: ArenaSocket; cookie: string; prompt: string }>((resolve) => artist.player.once('round:brief', (value) => resolve({ socket: artist.player, cookie: artist.cookie!, prompt: value.prompt }))),
+    ]);
+    const started = await new Promise<{ ok: boolean; error?: string }>((resolve) => host.player.emit('game:start', resolve)); expect(started.ok).toBe(true);
+    const drawer = await brief; const guesser = drawer.socket === host.player ? artist.player : host.player;
+    const revealed = new Promise<RoundResult>((resolve) => drawer.socket.once('round:reveal', resolve));
+    const guessed = await new Promise<{ ok: boolean; error?: string }>((resolve) => guesser.emit('guess:submit', { text: drawer.prompt }, resolve)); expect(guessed.ok).toBe(true);
+    const round = await revealed;
+    const reactions = await Promise.all(Array.from({ length: 40 }, () => new Promise<{ ok: boolean; error?: string }>((resolve) => drawer.socket.emit('reaction:send', { emoji: '😂' }, resolve))));
+    expect(reactions.some((ack) => !ack.ok && ack.error === 'Slow down for a moment')).toBe(true);
+    const kept = await new Promise<{ ok: boolean; data?: ArtworkDocument; error?: string }>((resolve) => drawer.socket.emit('round:keep', { roundId: round.roundId }, resolve));
+    expect(kept).toMatchObject({ ok: true, data: { origin: 'arena', status: 'gallery', sourceRoundId: round.roundId } });
+    const vaultResponse = await fetch(`${origin}/api/artworks`, { headers: { cookie: drawer.cookie } }); expect(vaultResponse.status).toBe(200);
+    expect(await vaultResponse.json()).toEqual(expect.arrayContaining([expect.objectContaining({ id: kept.data!.id, sourceRoundId: round.roundId })]));
+  }, 15_000);
 });

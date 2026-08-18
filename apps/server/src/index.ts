@@ -567,7 +567,7 @@ io.on('connection', (socket) => {
     const round = room.rounds.find((value) => value.roundId === input.roundId)!;
     return artwork.save({ ownerSessionId: sessionId!, origin: 'arena', status: 'gallery', title: round.prompt, canvasRatio: room.canvasRatio,
       width: 1200, height: 1200, strokes: round.strokes, sourceRoundId: round.roundId });
-  }));
+  }, false));
 
   socket.on('disconnect', () => {
     if (!sessionId) return;
@@ -677,8 +677,8 @@ function authorizeMetrics(authorization: string | undefined): boolean {
 function prometheusLabel(value: string): string { return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', '\\n').slice(0, 120); }
 function closedPeriodReference(period: 'weekly' | 'monthly', now: number): number { if (period === 'weekly') return now - 7 * 86_400_000; const date = new Date(now); return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() - 1, 15); }
 function sendMintError(response: express.Response, error: unknown): express.Response { return response.status(error instanceof MintServiceError ? error.status : 500).json({ error: error instanceof Error ? error.message : 'Minting could not continue' }); }
-function guarded<T>(key: string, ack: (value: { ok: boolean; data?: T; error?: string }) => void, action: () => T | Promise<T>): void {
-  if (!actionLimit.take(key)) { metricCounters.rateLimited += 1; metricCounters.socketRejected += 1; return ack({ ok: false, error: 'Slow down for a moment' }); }
+function guarded<T>(key: string, ack: (value: { ok: boolean; data?: T; error?: string }) => void, action: () => T | Promise<T>, useGeneralLimit = true): void {
+  if (useGeneralLimit && !actionLimit.take(key)) { metricCounters.rateLimited += 1; metricCounters.socketRejected += 1; return ack({ ok: false, error: 'Slow down for a moment' }); }
   Promise.resolve().then(action).then((data) => ack({ ok: true, data }), (error: unknown) => { metricCounters.socketRejected += 1; ack({ ok: false, error: error instanceof Error ? error.message : 'Something went wrong' }); });
 }
 
