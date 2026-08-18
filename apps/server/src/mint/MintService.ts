@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { ArtworkDocument, MintPreparation, PanicArchiveVoucher, PlayerProgress } from '@sketch-arena/protocol';
 import {
-  createPublicClient, decodeEventLog, encodeFunctionData, getAddress, http, isAddress, keccak256, parseAbi,
+  createPublicClient, decodeEventLog, encodeFunctionData, fallback, getAddress, http, isAddress, keccak256, parseAbi,
   parseUnits, toBytes, verifyMessage, type Address, type Hex, type PublicClient, type Transaction, type TransactionReceipt,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -175,23 +175,36 @@ export function loadMintConfiguration(environment: NodeJS.ProcessEnv = process.e
   };
 }
 
+function mintRpcUrls(config: MintConfiguration): string[] {
+  return [...new Set([config.rpcUrl, ...config.walletRpcUrls].filter((value): value is string => Boolean(value)))];
+}
+
+function createMintPublicClient(config: MintConfiguration, fetcher: typeof fetch = fetch): PublicClient {
+  const transports = mintRpcUrls(config).map((url) => http(url, { fetchFn: fetcher, timeout: 8_000 }));
+  if (!transports.length) throw new Error('No Shido RPC endpoint is configured');
+  return createPublicClient({
+    transport: fallback(transports, { rank: false, retryCount: 2, retryDelay: 400 }),
+  }) as PublicClient;
+}
+
 export async function validateMintInfrastructure(config: MintConfiguration, fetcher: typeof fetch = fetch): Promise<string[]> {
   assertConfigured(config);
   const errors: string[] = [];
   try {
-    const client = createPublicClient({ transport: http(config.rpcUrl) });
-    const [chainId, bytecode, signer, maxPrice, paused, name, symbol, contractPaymentToken, tokenName, tokenSymbol, tokenDecimals] = await Promise.all([
-      client.getChainId(), client.getBytecode({ address: config.contractAddress }),
-      client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'mintSigner' }),
-      client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'maxMintPrice' }),
-      client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'paused' }),
-      client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'name' }),
-      client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'symbol' }),
-      client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'paymentToken' }),
-      client.readContract({ address: config.paymentToken, abi: ERC20_READ_ABI, functionName: 'name' }),
-      client.readContract({ address: config.paymentToken, abi: ERC20_READ_ABI, functionName: 'symbol' }),
-      client.readContract({ address: config.paymentToken, abi: ERC20_READ_ABI, functionName: 'decimals' }),
-    ]);
+    const client = createMintPublicClient(config, fetcher);
+    // Public Shido endpoints intermittently throttle bursts. These checks are deliberately
+    // sequential, while the transport retries each read across every configured endpoint.
+    const chainId = await client.getChainId();
+    const bytecode = await client.getBytecode({ address: config.contractAddress });
+    const signer = await client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'mintSigner' });
+    const maxPrice = await client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'maxMintPrice' });
+    const paused = await client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'paused' });
+    const name = await client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'name' });
+    const symbol = await client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'symbol' });
+    const contractPaymentToken = await client.readContract({ address: config.contractAddress, abi: PANIC_ARCHIVE_READ_ABI, functionName: 'paymentToken' });
+    const tokenName = await client.readContract({ address: config.paymentToken, abi: ERC20_READ_ABI, functionName: 'name' });
+    const tokenSymbol = await client.readContract({ address: config.paymentToken, abi: ERC20_READ_ABI, functionName: 'symbol' });
+    const tokenDecimals = await client.readContract({ address: config.paymentToken, abi: ERC20_READ_ABI, functionName: 'decimals' });
     if (chainId !== config.chainId) errors.push('PANIC_ARCHIVE_RPC_CHAIN_ID_MISMATCH');
     if (!bytecode || bytecode === '0x') errors.push('PANIC_ARCHIVE_CONTRACT_CODE_MISSING');
     if (name !== 'Sketch Arena: The Panic Archive' || symbol !== 'PANIC') errors.push('PANIC_ARCHIVE_CONTRACT_IDENTITY_MISMATCH');
@@ -253,7 +266,7 @@ export class MintService {
     private readonly fetcher: typeof fetch = fetch, chain?: ChainReader,
     private readonly infrastructureValidator: MintInfrastructureValidator = (value) => validateMintInfrastructure(value, fetcher),
   ) {
-    this.chain = chain ?? (config.enabled && config.rpcUrl ? createPublicClient({ transport: http(config.rpcUrl) }) as PublicClient as ChainReader : null);
+    this.chain = chain ?? (config.enabled && config.rpcUrl ? createMintPublicClient(config) as ChainReader : null);
     this.readinessErrors = config.enabled ? ['PANIC_ARCHIVE_VERIFICATION_PENDING'] : [];
   }
 

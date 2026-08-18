@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { privateKeyToAccount } from 'viem/accounts';
-import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, parseAbi, parseAbiItem, verifyTypedData, type Hex, type Transaction, type TransactionReceipt } from 'viem';
+import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, encodeFunctionData, parseAbi, parseAbiItem, verifyTypedData, type Hex, type Transaction, type TransactionReceipt } from 'viem';
 import { MemoryArtworkRepository } from '../artwork/ArtworkRepository.js';
 import { MemoryProgressionRepository } from '../progression/ProgressionRepository.js';
 import { MemoryMintRepository, type MintRecord } from './MintRepository.js';
-import { MintService, type ChainReader, type MintConfiguration } from './MintService.js';
+import { MintService, validateMintInfrastructure, type ChainReader, type MintConfiguration } from './MintService.js';
 
 const userKey = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
 const signerKey = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as Hex;
@@ -90,6 +90,50 @@ describe('MintService', () => {
     expect(await service.verifyInfrastructure(true)).toMatchObject({ enabled: false, missing: ['PANIC_ARCHIVE_SIGNER_MISMATCH'] });
     failures = [];
     expect(await service.verifyInfrastructure(true)).toMatchObject({ enabled: true, missing: [] });
+  });
+
+  it('fails over from a throttled primary RPC and verifies the contract sequentially', async () => {
+    const config: MintConfiguration = { enabled: true, missing: [], contractAddress: contract, chainId: 31337, chainName: 'Local EVM', nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      rpcUrl: 'http://rpc-primary', walletRpcUrls: ['http://rpc-primary', 'http://rpc-fallback'], ipfsApiUrl: 'http://ipfs', ipfsPublicGateway: 'http://ipfs/ipfs', signerPrivateKey: signerKey,
+      paymentToken, mintUsdCents: 99, priceApiUrl: 'http://price-primary', priceFallbackApiUrl: 'http://price-fallback', maxPriceDeviationBps: 1_000,
+      voucherLifetimeMs: 900_000, requiredConfirmations: 1, publicOrigin: 'http://localhost:5173' };
+    const archiveAbi = parseAbi(['function mintSigner() view returns (address)', 'function maxMintPrice() view returns (uint256)', 'function paused() view returns (bool)', 'function name() view returns (string)', 'function symbol() view returns (string)', 'function paymentToken() view returns (address)']);
+    const tokenAbi = parseAbi(['function name() view returns (string)', 'function symbol() view returns (string)', 'function decimals() view returns (uint8)']);
+    const results = new Map<string, Hex>([
+      [encodeFunctionData({ abi: archiveAbi, functionName: 'mintSigner' }), encodeAbiParameters([{ type: 'address' }], [privateKeyToAccount(signerKey).address])],
+      [encodeFunctionData({ abi: archiveAbi, functionName: 'maxMintPrice' }), encodeAbiParameters([{ type: 'uint256' }], [10n ** 30n])],
+      [encodeFunctionData({ abi: archiveAbi, functionName: 'paused' }), encodeAbiParameters([{ type: 'bool' }], [false])],
+      [`${contract.toLowerCase()}:${encodeFunctionData({ abi: archiveAbi, functionName: 'name' })}`, encodeAbiParameters([{ type: 'string' }], ['Sketch Arena: The Panic Archive'])],
+      [`${contract.toLowerCase()}:${encodeFunctionData({ abi: archiveAbi, functionName: 'symbol' })}`, encodeAbiParameters([{ type: 'string' }], ['PANIC'])],
+      [encodeFunctionData({ abi: archiveAbi, functionName: 'paymentToken' }), encodeAbiParameters([{ type: 'address' }], [paymentToken])],
+      [`${paymentToken.toLowerCase()}:${encodeFunctionData({ abi: tokenAbi, functionName: 'name' })}`, encodeAbiParameters([{ type: 'string' }], ['Wrapped Shido'])],
+      [`${paymentToken.toLowerCase()}:${encodeFunctionData({ abi: tokenAbi, functionName: 'symbol' })}`, encodeAbiParameters([{ type: 'string' }], ['WSHIDO'])],
+      [encodeFunctionData({ abi: tokenAbi, functionName: 'decimals' }), encodeAbiParameters([{ type: 'uint8' }], [18])],
+    ]);
+    let primaryAttempts = 0; const rpcMethods: string[] = [];
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = (input instanceof Request ? input.url : String(input)).replace(/\/$/, '');
+      if (url === config.rpcUrl) { primaryAttempts += 1; return new Response('busy', { status: 503 }); }
+      if (url === 'http://rpc-fallback') {
+        const body = init?.body ?? (input instanceof Request ? await input.clone().text() : '');
+        const request = JSON.parse(String(body)) as { id: number; method: string; params?: Array<{ to?: string; data?: string } | string> };
+        rpcMethods.push(request.method);
+        let result: string | undefined;
+        if (request.method === 'eth_chainId') result = '0x7a69';
+        else if (request.method === 'eth_getCode') result = '0x6000';
+        else if (request.method === 'eth_call') {
+          const call = request.params?.[0] as { to?: string; data?: string };
+          result = results.get(`${call.to?.toLowerCase()}:${call.data}`) ?? results.get(call.data ?? '');
+        }
+        return Response.json({ jsonrpc: '2.0', id: request.id, result });
+      }
+      if (url.startsWith('http://price')) return Response.json({ price_usd: 1 });
+      if (url === 'http://ipfs/api/v0/version') return Response.json({ Version: 'test' });
+      return new Response('not found', { status: 404 });
+    });
+    await expect(validateMintInfrastructure(config, fetcher)).resolves.toEqual([]);
+    expect(primaryAttempts).toBeGreaterThanOrEqual(11);
+    expect(rpcMethods).toEqual(['eth_chainId', 'eth_getCode', ...Array(9).fill('eth_call')]);
   });
 
   it('abandons retired-contract attempts for deletion but protects current-contract submissions', async () => {
