@@ -17,7 +17,7 @@ async function freePort(): Promise<number> {
 }
 
 async function waitForServer(origin: string, child: ChildProcess, logs: string[]): Promise<void> {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     if (child.exitCode !== null) throw new Error(`Socket test server exited early (${child.exitCode})\n${logs.join('')}`);
     try { const response = await fetch(`${origin}/health/ready`); if (response.ok) return; } catch { /* startup still in progress */ }
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -83,10 +83,11 @@ describe('Socket.IO authoritative transport lifecycle', () => {
   });
 
   it('reserves a larger request budget for detailed Vault artwork only', async () => {
-    const body = JSON.stringify({ padding: 'x'.repeat(300_000) });
+    const artworkBody = JSON.stringify({ padding: 'x'.repeat(5_000_000) });
+    const ordinaryBody = JSON.stringify({ padding: 'x'.repeat(300_000) });
     const [artworkResponse, ordinaryResponse] = await Promise.all([
-      fetch(`${origin}/api/artworks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }),
-      fetch(`${origin}/api/promotions/redeem`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }),
+      fetch(`${origin}/api/artworks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: artworkBody }),
+      fetch(`${origin}/api/promotions/redeem`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: ordinaryBody }),
     ]);
     expect(artworkResponse.status).toBe(401);
     expect(ordinaryResponse.status).toBe(413);

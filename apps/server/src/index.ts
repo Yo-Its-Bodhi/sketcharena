@@ -49,10 +49,10 @@ app.set('trust proxy', process.env.TRUST_PROXY?.trim() || 'loopback');
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
 app.use(cors({ origin: WEB_ORIGINS, credentials: true }));
 const standardJson = express.json({ limit: '256kb' });
-const artworkJson = express.json({ limit: '4mb' });
+const artworkJson = express.json({ limit: '32mb' });
 app.use((request, response, next) => (request.method === 'POST' && request.path === '/api/artworks' ? artworkJson : standardJson)(request, response, next));
 const jsonErrorHandler: ErrorRequestHandler = (error, request, response, next) => {
-  if (error && typeof error === 'object' && 'type' in error && error.type === 'entity.too.large') return response.status(413).json({ error: request.path === '/api/artworks' ? 'Artwork is too detailed for one Vault save (4 MB maximum)' : 'Request is too large' });
+  if (error && typeof error === 'object' && 'type' in error && error.type === 'entity.too.large') return response.status(413).json({ error: request.path === '/api/artworks' ? 'Artwork is too detailed for one Vault save (32 MB maximum)' : 'Request is too large' });
   next(error);
 };
 app.use(jsonErrorHandler);

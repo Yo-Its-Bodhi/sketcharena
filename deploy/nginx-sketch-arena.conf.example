@@ -10,7 +10,7 @@ server {
     index index.html;
     # Detailed Studio drawings can exceed the default API budget. The app server
     # still applies 256 KB to every non-artwork JSON route.
-    client_max_body_size 4m;
+    client_max_body_size 32m;
 
     location = /health/live {
         proxy_pass http://127.0.0.1:4100;
