@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { io, type Socket } from 'socket.io-client';
-import type { ClientToServerEvents, ModerationReport, RoomView, ServerToClientEvents, Stroke } from '@sketch-arena/protocol';
+import type { ArtworkDocument, ClientToServerEvents, ModerationReport, RoomView, RoundResult, ServerToClientEvents, Stroke } from '@sketch-arena/protocol';
 
 type ArenaSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -17,7 +17,7 @@ async function freePort(): Promise<number> {
 }
 
 async function waitForServer(origin: string, child: ChildProcess, logs: string[]): Promise<void> {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     if (child.exitCode !== null) throw new Error(`Socket test server exited early (${child.exitCode})\n${logs.join('')}`);
     try { const response = await fetch(`${origin}/health/ready`); if (response.ok) return; } catch { /* startup still in progress */ }
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -82,6 +82,18 @@ describe('Socket.IO authoritative transport lifecycle', () => {
     expect(logs.join('')).toContain('"event":"server.ready"');
   });
 
+  it('reserves a larger request budget for detailed Vault artwork only', async () => {
+    const artworkBody = JSON.stringify({ padding: 'x'.repeat(5_000_000) });
+    const ordinaryBody = JSON.stringify({ padding: 'x'.repeat(300_000) });
+    const [artworkResponse, ordinaryResponse] = await Promise.all([
+      fetch(`${origin}/api/artworks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: artworkBody }),
+      fetch(`${origin}/api/promotions/redeem`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: ordinaryBody }),
+    ]);
+    expect(artworkResponse.status).toBe(401);
+    expect(ordinaryResponse.status).toBe(413);
+    expect(await ordinaryResponse.json()).toMatchObject({ error: 'Request is too large' });
+  });
+
   it('migrates a legacy Vault into a revocable cookie session used by HTTP and live play', async () => {
     const credential = 'c'.repeat(64);
     const migrated = await fetch(`${origin}/api/account/migrate`, { method: 'POST', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Cookie Player', deviceLabel: 'Integration browser' }) });
@@ -90,6 +102,8 @@ describe('Socket.IO authoritative transport lifecycle', () => {
     const cookie = migrated.headers.getSetCookie()[0]?.split(';')[0]; expect(cookie).toMatch(/^sketch_session=/);
     const accountResponse = await fetch(`${origin}/api/account`, { headers: { cookie: cookie! } });
     expect(accountResponse.status).toBe(200); expect(await accountResponse.json()).toMatchObject({ id: account.id, name: 'Cookie Player', passkeyCount: 0 });
+    const duplicate = await fetch(`${origin}/api/account/migrate`, { method: 'POST', headers: { authorization: `Bearer ${'d'.repeat(64)}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'cookie player', deviceLabel: 'Impostor browser' }) });
+    expect(duplicate.status).toBe(409); expect(await duplicate.json()).toMatchObject({ error: expect.stringContaining('already claimed') });
     const options = await fetch(`${origin}/api/account/passkeys/register/options`, { method: 'POST', headers: { cookie: cookie! } });
     expect(options.status).toBe(200); expect(await options.json()).toMatchObject({ options: { rp: { id: '127.0.0.1' }, authenticatorSelection: { residentKey: 'required', userVerification: 'required' } } });
     const player = await connect(origin, cookie); sockets.push(player);
@@ -99,9 +113,11 @@ describe('Socket.IO authoritative transport lifecycle', () => {
 
   it('joins two players, replaces a duplicate tab, rejects stale actions, and migrates the host', async () => {
     const aliceCredential = 'a'.repeat(64); const bobCredential = 'b'.repeat(64);
-    const alice = await connect(origin); const bob = await connect(origin); sockets.push(alice, bob);
-    const aliceSession = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => alice.emit('session:resume', { credential: aliceCredential, name: 'Alice' }, resolve));
-    const bobSession = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => bob.emit('session:resume', { credential: bobCredential, name: 'Bob' }, resolve));
+    const migrate = async (credential: string, name: string) => { const response = await fetch(`${origin}/api/account/migrate`, { method: 'POST', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: JSON.stringify({ name, deviceLabel: `${name} browser` }) }); expect(response.status).toBe(201); return response.headers.getSetCookie()[0]?.split(';')[0]; };
+    const aliceCookie = await migrate(aliceCredential, 'Alice'); const bobCookie = await migrate(bobCredential, 'Bob');
+    const alice = await connect(origin, aliceCookie); const bob = await connect(origin, bobCookie); sockets.push(alice, bob);
+    const aliceSession = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => alice.emit('session:resume', { name: 'Not Alice' }, resolve));
+    const bobSession = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => bob.emit('session:resume', { name: 'Not Bob' }, resolve));
     expect(aliceSession.ok).toBe(true); expect(bobSession.ok).toBe(true);
 
     const created = await new Promise<{ ok: boolean; data?: { room: RoomView }; error?: string }>((resolve) => alice.emit('room:create', { name: 'Transport Test', category: 'chaos', isPrivate: false, maxPlayers: 4, roundSeconds: 30 }, resolve));
@@ -118,14 +134,16 @@ describe('Socket.IO authoritative transport lifecycle', () => {
     const reportAck = await new Promise<{ ok: boolean; data?: { reportId: string }; error?: string }>((resolve) => bob.emit('player:report', { playerId: alicePlayer.id, category: 'harassment', detail: 'Repeated targeted abuse during the room chat.' }, resolve));
     expect(reportAck.ok).toBe(true); expect(reportAck.data?.reportId).toMatch(/^[0-9a-f-]{36}$/i);
     const staffHeaders = { authorization: `Bearer ${backstageToken}`, 'content-type': 'application/json' };
+    const closedPremium = await fetch(`${origin}/api/admin/grants`, { method: 'POST', headers: staffHeaders, body: JSON.stringify({ kind: 'battle-pass', amount: 1, reason: 'Season 0 must stay free', sessionIds: [aliceSession.data!.sessionId], idempotencyKey: 'closed-season-zero-premium' }) });
+    expect(closedPremium.status).toBe(400); expect(await closedPremium.json()).toMatchObject({ error: 'Reward grant is invalid' });
     const reportResponse = await fetch(`${origin}/api/admin/reports`, { headers: staffHeaders });
     expect(reportResponse.status).toBe(200); const reportList = await reportResponse.json() as ModerationReport[];
     expect(reportList[0]).toMatchObject({ id: reportAck.data!.reportId, reporterName: 'Bob', targetName: 'Alice', status: 'open' });
     const reviewedResponse = await fetch(`${origin}/api/admin/reports/${reportAck.data!.reportId}/status`, { method: 'POST', headers: staffHeaders, body: JSON.stringify({ status: 'resolved', resolutionNote: 'Reviewed by the integration moderator.' }) });
     expect(reviewedResponse.status).toBe(200); expect(await reviewedResponse.json()).toMatchObject({ status: 'resolved', handledBy: 'backstage:test-moderator' });
 
-    const replacement = await connect(origin); sockets.push(replacement); const replacementState = nextRoomState(replacement);
-    const resumed = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => replacement.emit('session:resume', { credential: aliceCredential, name: 'Alice' }, resolve));
+    const replacement = await connect(origin, aliceCookie); sockets.push(replacement); const replacementState = nextRoomState(replacement);
+    const resumed = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => replacement.emit('session:resume', { name: 'Definitely Not Alice' }, resolve));
     expect(resumed.ok).toBe(true); expect((await replacementState).players.find((player) => player.name === 'Alice')?.connected).toBe(true);
 
     const staleAction = await new Promise<{ ok: boolean; error?: string }>((resolve) => alice.emit('chat:send', { text: 'stale tab speaking' }, resolve));
@@ -137,4 +155,38 @@ describe('Socket.IO authoritative transport lifecycle', () => {
     expect(left.ok).toBe(true); const migrated = await bobSawMigration;
     expect(migrated.playerCount).toBe(1); expect(migrated.players[0]).toMatchObject({ name: 'Bob', isHost: true, connected: true });
   }, 10_000);
+
+  it('keeps a finished drawing after heavy room activity and advertises another public room when the first is full', async () => {
+    const createPlayer = async (credential: string, name: string) => {
+      const response = await fetch(`${origin}/api/account/migrate`, { method: 'POST', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: JSON.stringify({ name, deviceLabel: `${name} browser` }) });
+      expect(response.status).toBe(201); const cookie = response.headers.getSetCookie()[0]?.split(';')[0]; const player = await connect(origin, cookie); sockets.push(player);
+      const resumed = await new Promise<{ ok: boolean; data?: { sessionId: string }; error?: string }>((resolve) => player.emit('session:resume', { name }, resolve));
+      expect(resumed.ok).toBe(true); return { player, cookie };
+    };
+    const host = await createPlayer('1'.repeat(64), 'Room Host'); const artist = await createPlayer('2'.repeat(64), 'Vault Artist'); const overflow = await createPlayer('3'.repeat(64), 'Overflow Host');
+    const created = await new Promise<{ ok: boolean; data?: { room: RoomView }; error?: string }>((resolve) => host.player.emit('room:create', { name: 'Full Public Room', category: 'chaos', isPrivate: false, maxPlayers: 2, roundSeconds: 30 }, resolve));
+    expect(created.ok).toBe(true); const roomId = created.data!.room.id;
+    const joined = await new Promise<{ ok: boolean; data?: { room: RoomView }; error?: string }>((resolve) => artist.player.emit('room:join', { roomId }, resolve));
+    expect(joined).toMatchObject({ ok: true, data: { room: { playerCount: 2, maxPlayers: 2 } } });
+    const second = await new Promise<{ ok: boolean; data?: { room: RoomView }; error?: string }>((resolve) => overflow.player.emit('room:create', { name: 'Overflow Public Room', category: 'music', isPrivate: false, maxPlayers: 8, roundSeconds: 45 }, resolve));
+    expect(second.ok).toBe(true);
+    const advertised = await (await fetch(`${origin}/api/rooms`)).json() as Array<{ id: string; playerCount: number; maxPlayers: number }>;
+    expect(advertised).toEqual(expect.arrayContaining([expect.objectContaining({ id: roomId, playerCount: 2, maxPlayers: 2 }), expect.objectContaining({ id: second.data!.room.id, playerCount: 1, maxPlayers: 8 })]));
+
+    const brief = Promise.race([
+      new Promise<{ socket: ArenaSocket; cookie: string; prompt: string }>((resolve) => host.player.once('round:brief', (value) => resolve({ socket: host.player, cookie: host.cookie!, prompt: value.prompt }))),
+      new Promise<{ socket: ArenaSocket; cookie: string; prompt: string }>((resolve) => artist.player.once('round:brief', (value) => resolve({ socket: artist.player, cookie: artist.cookie!, prompt: value.prompt }))),
+    ]);
+    const started = await new Promise<{ ok: boolean; error?: string }>((resolve) => host.player.emit('game:start', resolve)); expect(started.ok).toBe(true);
+    const drawer = await brief; const guesser = drawer.socket === host.player ? artist.player : host.player;
+    const revealed = new Promise<RoundResult>((resolve) => drawer.socket.once('round:reveal', resolve));
+    const guessed = await new Promise<{ ok: boolean; error?: string }>((resolve) => guesser.emit('guess:submit', { text: drawer.prompt }, resolve)); expect(guessed.ok).toBe(true);
+    const round = await revealed;
+    const reactions = await Promise.all(Array.from({ length: 40 }, () => new Promise<{ ok: boolean; error?: string }>((resolve) => drawer.socket.emit('reaction:send', { emoji: '😂' }, resolve))));
+    expect(reactions.some((ack) => !ack.ok && ack.error === 'Slow down for a moment')).toBe(true);
+    const kept = await new Promise<{ ok: boolean; data?: ArtworkDocument; error?: string }>((resolve) => drawer.socket.emit('round:keep', { roundId: round.roundId }, resolve));
+    expect(kept).toMatchObject({ ok: true, data: { origin: 'arena', status: 'gallery', sourceRoundId: round.roundId } });
+    const vaultResponse = await fetch(`${origin}/api/artworks`, { headers: { cookie: drawer.cookie } }); expect(vaultResponse.status).toBe(200);
+    expect(await vaultResponse.json()).toEqual(expect.arrayContaining([expect.objectContaining({ id: kept.data!.id, sourceRoundId: round.roundId })]));
+  }, 15_000);
 });

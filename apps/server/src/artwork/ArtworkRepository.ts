@@ -5,7 +5,7 @@ import type { ArtworkDocument, ArtworkOrigin, ArtworkStatus, CanvasRatio, PanicA
 
 export function toPanicArchiveItem(record: ArtworkDocument): PanicArchiveItem {
   if (record.status !== 'minted' || record.mint?.status !== 'confirmed' || !record.mint.tokenId || !record.mint.contractAddress || !record.mint.transactionHash || !record.mint.tokenURI) throw new Error('Artwork is not a confirmed Panic Archive mint');
-  return { id: record.id, title: record.title, description: record.description, origin: record.origin, canvasRatio: record.canvasRatio, width: record.width, height: record.height, strokes: record.strokes, createdAt: record.createdAt, mintedAt: record.updatedAt, seasonId: 0, seasonName: 'The First Mess', tokenId: record.mint.tokenId, contractAddress: record.mint.contractAddress, transactionHash: record.mint.transactionHash, tokenURI: record.mint.tokenURI, marketplaceUrl: record.mint.marketplaceUrl };
+  return { id: record.id, title: record.title, description: record.description, origin: record.origin, canvasRatio: record.canvasRatio, width: record.width, height: record.height, strokes: record.strokes, previewUrl: record.previewUrl, createdAt: record.createdAt, mintedAt: record.updatedAt, seasonId: 0, seasonName: 'The First Mess', tokenId: record.mint.tokenId, contractAddress: record.mint.contractAddress, transactionHash: record.mint.transactionHash, tokenURI: record.mint.tokenURI, marketplaceUrl: record.mint.marketplaceUrl };
 }
 
 export interface SaveArtworkInput {
@@ -19,6 +19,7 @@ export interface SaveArtworkInput {
   width: number;
   height: number;
   strokes: Stroke[];
+  previewUrl?: string;
   sourceRoundId?: string;
 }
 
@@ -26,7 +27,8 @@ export interface ArtworkRepository {
   save(input: SaveArtworkInput): Promise<ArtworkDocument>;
   get(id: string): Promise<ArtworkDocument | null>;
   listByOwner(ownerSessionId: string): Promise<ArtworkDocument[]>;
-  listMinted(limit?: number): Promise<ArtworkDocument[]>;
+  listMinted(limit?: number, contractAddress?: string): Promise<ArtworkDocument[]>;
+  deleteOwned(id: string, ownerSessionId: string): Promise<boolean>;
   updateMint(id: string, ownerSessionId: string, mint: NonNullable<ArtworkDocument['mint']>, status: ArtworkDocument['status']): Promise<ArtworkDocument>;
 }
 
@@ -44,10 +46,10 @@ export class MemoryArtworkRepository implements ArtworkRepository {
     const previous = input.id ? this.records.get(input.id) : undefined;
     if (previous && previous.ownerSessionId !== input.ownerSessionId) throw new Error('Artwork owner mismatch');
     const document: ArtworkDocument = {
-      id: previous?.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin,
+      id: previous?.id ?? input.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin,
       status: input.status ?? previous?.status ?? 'draft', title: input.title.trim().slice(0, 80),
       description: (input.description ?? '').trim().slice(0, 500), canvasRatio: input.canvasRatio,
-      width: input.width, height: input.height, strokes: input.strokes, sourceRoundId: input.sourceRoundId,
+      width: input.width, height: input.height, strokes: input.strokes, previewUrl: input.previewUrl ?? previous?.previewUrl, sourceRoundId: input.sourceRoundId,
       createdAt: previous?.createdAt ?? now, updatedAt: now, mint: previous?.mint,
     };
     this.records.set(document.id, document);
@@ -58,8 +60,13 @@ export class MemoryArtworkRepository implements ArtworkRepository {
   async listByOwner(ownerSessionId: string): Promise<ArtworkDocument[]> {
     return [...this.records.values()].filter((record) => record.ownerSessionId === ownerSessionId).sort((a, b) => b.updatedAt - a.updatedAt);
   }
-  async listMinted(limit = 100): Promise<ArtworkDocument[]> {
-    return [...this.records.values()].filter((record) => record.status === 'minted' && record.mint?.status === 'confirmed' && record.mint.tokenId && record.mint.contractAddress && record.mint.transactionHash && record.mint.tokenURI).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, Math.max(1, Math.min(500, limit)));
+  async listMinted(limit = 100, contractAddress?: string): Promise<ArtworkDocument[]> {
+    const activeContract = contractAddress?.toLowerCase();
+    return [...this.records.values()].filter((record) => record.status === 'minted' && record.mint?.status === 'confirmed' && record.mint.tokenId && record.mint.contractAddress && (!activeContract || record.mint.contractAddress.toLowerCase() === activeContract) && record.mint.transactionHash && record.mint.tokenURI).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, Math.max(1, Math.min(500, limit)));
+  }
+  async deleteOwned(id: string, ownerSessionId: string): Promise<boolean> {
+    const record = this.records.get(id); if (!record || record.ownerSessionId !== ownerSessionId) return false;
+    return this.records.delete(id);
   }
   async updateMint(id: string, ownerSessionId: string, mint: NonNullable<ArtworkDocument['mint']>, status: ArtworkDocument['status']): Promise<ArtworkDocument> {
     const record = this.records.get(id); if (!record) throw new Error('Artwork not found'); if (record.ownerSessionId !== ownerSessionId) throw new Error('Artwork owner mismatch');
@@ -83,10 +90,10 @@ export class FileArtworkRepository implements ArtworkRepository {
     const previous = input.id ? records.get(input.id) : undefined;
     if (previous && previous.ownerSessionId !== input.ownerSessionId) throw new Error('Artwork owner mismatch');
     const document: ArtworkDocument = {
-      id: previous?.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin,
+      id: previous?.id ?? input.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin,
       status: input.status ?? previous?.status ?? 'draft', title: input.title.trim().slice(0, 80),
       description: (input.description ?? '').trim().slice(0, 500), canvasRatio: input.canvasRatio,
-      width: input.width, height: input.height, strokes: input.strokes, sourceRoundId: input.sourceRoundId,
+      width: input.width, height: input.height, strokes: input.strokes, previewUrl: input.previewUrl ?? previous?.previewUrl, sourceRoundId: input.sourceRoundId,
       createdAt: previous?.createdAt ?? now, updatedAt: now, mint: previous?.mint,
     };
     records.set(document.id, document); await this.persist(records); return document;
@@ -95,8 +102,13 @@ export class FileArtworkRepository implements ArtworkRepository {
   async listByOwner(ownerSessionId: string): Promise<ArtworkDocument[]> {
     return [...(await this.load()).values()].filter((record) => record.ownerSessionId === ownerSessionId).sort((a, b) => b.updatedAt - a.updatedAt);
   }
-  async listMinted(limit = 100): Promise<ArtworkDocument[]> {
-    return [...(await this.load()).values()].filter((record) => record.status === 'minted' && record.mint?.status === 'confirmed' && record.mint.tokenId && record.mint.contractAddress && record.mint.transactionHash && record.mint.tokenURI).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, Math.max(1, Math.min(500, limit)));
+  async listMinted(limit = 100, contractAddress?: string): Promise<ArtworkDocument[]> {
+    const activeContract = contractAddress?.toLowerCase();
+    return [...(await this.load()).values()].filter((record) => record.status === 'minted' && record.mint?.status === 'confirmed' && record.mint.tokenId && record.mint.contractAddress && (!activeContract || record.mint.contractAddress.toLowerCase() === activeContract) && record.mint.transactionHash && record.mint.tokenURI).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, Math.max(1, Math.min(500, limit)));
+  }
+  async deleteOwned(id: string, ownerSessionId: string): Promise<boolean> {
+    const records = await this.load(); const record = records.get(id); if (!record || record.ownerSessionId !== ownerSessionId) return false;
+    records.delete(id); await this.persist(records); return true;
   }
   async updateMint(id: string, ownerSessionId: string, mint: NonNullable<ArtworkDocument['mint']>, status: ArtworkDocument['status']): Promise<ArtworkDocument> {
     const records = await this.load(); const record = records.get(id); if (!record) throw new Error('Artwork not found'); if (record.ownerSessionId !== ownerSessionId) throw new Error('Artwork owner mismatch');

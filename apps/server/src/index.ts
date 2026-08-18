@@ -2,18 +2,17 @@ import { createServer } from 'node:http';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import cors from 'cors';
-import express from 'express';
+import express, { type ErrorRequestHandler } from 'express';
 import helmet from 'helmet';
 import { Server } from 'socket.io';
 import { z } from 'zod';
-import type { ClientToServerEvents, MatchResult, ServerToClientEvents, Stroke } from '@sketch-arena/protocol';
+import type { ArtworkDocument, ClientToServerEvents, MatchResult, ServerToClientEvents, Stroke } from '@sketch-arena/protocol';
 import { FileArtworkRepository, MemoryArtworkRepository, toPanicArchiveItem } from './artwork/ArtworkRepository.js';
 import { GAME, GameRoom } from './game/GameRoom.js';
-import { FileProgressionRepository, MemoryProgressionRepository, SEASON_ITEMS } from './progression/ProgressionRepository.js';
+import { ACTIVE_SEASON_ITEMS, FileProgressionRepository, MemoryProgressionRepository, type PlayerProgress } from './progression/ProgressionRepository.js';
 import { FileMintRepository, MemoryMintRepository } from './mint/MintRepository.js';
-import { MintService, MintServiceError, loadMintConfiguration } from './mint/MintService.js';
+import { buildMarketplaceTokenUrl, MintService, MintServiceError, loadMintConfiguration } from './mint/MintService.js';
 import { SlidingLimit } from './rateLimit.js';
-import { sessionFromAuthorization, sessionIdFromCredential } from './sessionIdentity.js';
 import { BackstageAuth, type BackstageRole } from './backstageAuth.js';
 import { FilePromotionRepository, MemoryPromotionRepository, PromotionService } from './promotion/PromotionRepository.js';
 import { errorFields, log } from './logger.js';
@@ -30,6 +29,7 @@ import { PostgresMintRepository } from './mint/PostgresMintRepository.js';
 import { PostgresProgressionRepository } from './progression/PostgresProgressionRepository.js';
 import { PostgresPromotionRepository } from './promotion/PostgresPromotionRepository.js';
 import { PostgresReportRepository } from './moderation/PostgresReportRepository.js';
+import { preparePanicArchiveDeployment } from './mint/PanicArchiveDeployment.js';
 
 const PORT = Number(process.env.PORT ?? 4100);
 const BIND_HOST = process.env.BIND_HOST ?? '127.0.0.1';
@@ -48,7 +48,14 @@ app.disable('x-powered-by');
 app.set('trust proxy', process.env.TRUST_PROXY?.trim() || 'loopback');
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
 app.use(cors({ origin: WEB_ORIGINS, credentials: true }));
-app.use(express.json({ limit: '256kb' }));
+const standardJson = express.json({ limit: '256kb' });
+const artworkJson = express.json({ limit: '32mb' });
+app.use((request, response, next) => (request.method === 'POST' && request.path === '/api/artworks' ? artworkJson : standardJson)(request, response, next));
+const jsonErrorHandler: ErrorRequestHandler = (error, request, response, next) => {
+  if (error && typeof error === 'object' && 'type' in error && error.type === 'entity.too.large') return response.status(413).json({ error: request.path === '/api/artworks' ? 'Artwork is too detailed for one Vault save (32 MB maximum)' : 'Request is too large' });
+  next(error);
+};
+app.use(jsonErrorHandler);
 app.use((request, response, next) => {
   const requestId = randomUUID(); const requestStarted = performance.now();
   response.setHeader('x-request-id', requestId);
@@ -85,6 +92,8 @@ const mintRepository = databasePool
   ? new MemoryMintRepository()
   : new FileMintRepository(persistence.mintFile);
 const minting = new MintService(artwork, progression, mintRepository, loadMintConfiguration());
+const initialMintStatus = await minting.verifyInfrastructure(true);
+if (minting.config.enabled && !initialMintStatus.enabled) log('warn', 'mint.infrastructure_not_ready', { checks: initialMintStatus.missing.join(',') });
 const promotionRepository = databasePool ? new PostgresPromotionRepository(databasePool) : persistence.promotionFile === ':memory:' ? new MemoryPromotionRepository() : new FilePromotionRepository(persistence.promotionFile);
 const promotions = new PromotionService(promotionRepository, progression);
 const reports = databasePool ? new PostgresReportRepository(databasePool) : persistence.reportFile === ':memory:' ? new MemoryReportRepository() : new FileReportRepository(persistence.reportFile);
@@ -119,7 +128,7 @@ const accountMigrationSchema = z.object({ name: nameSchema, deviceLabel: z.strin
 const passkeyRegistrationSchema = z.object({ challengeId: z.string().uuid(), label: z.string().trim().min(2).max(80).default('My passkey'), response: z.object({ id: z.string().min(1) }).passthrough() });
 const passkeyAuthenticationSchema = z.object({ challengeId: z.string().uuid(), deviceLabel: z.string().trim().min(2).max(80).default('Passkey device'), response: z.object({ id: z.string().min(1) }).passthrough() });
 const roomCreateSchema = z.object({
-  name: z.string().trim().min(2).max(36), category: z.enum(['chaos', 'classic', 'crypto']).default('chaos'),
+  name: z.string().trim().min(2).max(36), category: z.enum(['chaos', 'classic', 'crypto', 'animals', 'food', 'screen', 'music', 'places', 'legends']).default('chaos'),
   isPrivate: z.boolean().optional().default(false), maxPlayers: z.number().int().min(2).max(GAME.maxPlayers).optional().default(8),
   roundSeconds: z.union([z.literal(30), z.literal(45), z.literal(60)]).optional().default(45),
 });
@@ -131,18 +140,23 @@ const reportPlayerSchema = z.object({ playerId: z.string().min(1).max(24), categ
 const reportStatusSchema = z.enum(['open', 'reviewing', 'resolved', 'dismissed']);
 const reportUpdateSchema = z.object({ status: reportStatusSchema, resolutionNote: z.string().trim().min(3).max(500) });
 const equipItemSchema = z.object({ itemId: z.string().trim().min(2).max(80) });
+const leaderboardPeriodSchema = z.enum(['weekly', 'monthly', 'season', 'all-time']);
 const strokeSchema: z.ZodType<Stroke> = z.object({
   id: z.string().min(1).max(64), tool: z.enum(['pencil', 'eraser', 'fill']), color: z.string().regex(/^#[0-9a-f]{6}$/i),
   size: z.number().min(1).max(160), points: z.array(z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), pressure: z.number().min(0).max(1).optional() })).min(1).max(GAME.maxPointsPerStroke),
   at: z.number().nonnegative(), brush: z.enum(['pencil', 'ink', 'marker', 'airbrush', 'charcoal', 'technical', 'watercolor', 'pastel', 'pixel', 'calligraphy', 'neon']).optional(),
   shape: z.enum(['freehand', 'line', 'rectangle', 'ellipse', 'arrow', 'triangle']).optional(), opacity: z.number().min(.01).max(1).optional(), smoothing: z.number().min(0).max(1).optional(),
+  layerId: z.string().min(1).max(64).optional(), blendMode: z.enum(['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten']).optional(),
 });
 const artworkSchema = z.object({
   id: z.string().uuid().optional(), ownerSessionId: z.string().uuid().optional(), origin: z.enum(['arena', 'studio']),
   status: z.enum(['draft', 'gallery', 'mint-ready']).optional(), title: z.string().trim().min(1).max(80),
   description: z.string().max(500).optional(), canvasRatio: z.enum(['square', 'portrait', 'landscape']),
   width: z.number().int().min(256).max(8000), height: z.number().int().min(256).max(8000),
-  strokes: z.array(strokeSchema).max(GAME.maxStrokes), sourceRoundId: z.string().uuid().optional(),
+  strokes: z.array(strokeSchema).max(GAME.maxStrokes), previewUrl: z.string().max(16_000_000).refine((value) => {
+    if (!value.startsWith('data:image/png;base64,')) return false;
+    try { const bytes = Buffer.from(value.slice('data:image/png;base64,'.length), 'base64'); return bytes.length <= 12_000_000 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])); } catch { return false; }
+  }, 'Artwork preview must be a valid PNG').optional(), sourceRoundId: z.string().uuid().optional(),
 });
 
 const health = () => ({ ...operations.snapshot(rooms.size, io.engine.clientsCount), release: RELEASE_SHA });
@@ -175,10 +189,15 @@ app.use('/api', (request, response, next) => {
 app.post('/api/account/migrate', async (request, response) => {
   const credential = legacyCredentialFromAuthorization(request.headers.authorization); if (!credential) return response.status(401).json({ error: 'Recovery credential required' });
   const parsed = accountMigrationSchema.safeParse(request.body); if (!parsed.success) return response.status(400).json({ error: 'Account migration request is invalid' });
-  const migrated = await accounts.migrateLegacy(credential, parsed.data.name, parsed.data.deviceLabel);
-  setPlayerCookie(response, migrated.token, migrated.session.expiresAt);
-  log('info', 'account.legacy_migrated', { accountId: migrated.account.id, sessionId: migrated.session.id });
-  return response.status(201).json(publicAccount(migrated.account, migrated.session.id));
+  try {
+    const migrated = await accounts.migrateLegacy(credential, parsed.data.name, parsed.data.deviceLabel);
+    setPlayerCookie(response, migrated.token, migrated.session.expiresAt);
+    log('info', 'account.legacy_migrated', { accountId: migrated.account.id, sessionId: migrated.session.id });
+    return response.status(201).json(publicAccount(migrated.account, migrated.session.id));
+  } catch (error) {
+    const message = error instanceof Error && /name.*claimed/i.test(error.message) ? error.message : 'That name could not be claimed';
+    return response.status(409).json({ error: message });
+  }
 });
 app.get('/api/account', async (request, response) => {
   const authenticated = await playerAccountFromRequest(request); if (!authenticated) return response.status(401).json({ error: 'Player authentication required' });
@@ -230,15 +249,33 @@ const contractAccessSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('set-blocked'), address: walletAddressSchema, enabled: z.boolean() }),
   z.object({ action: z.literal('set-approved'), address: walletAddressSchema, enabled: z.boolean() }),
   z.object({ action: z.literal('set-allowlist'), enabled: z.boolean() }),
+  z.object({ action: z.literal('set-paused'), enabled: z.boolean() }),
 ]);
+const withMarketplaceUrl = (record: ArtworkDocument): ArtworkDocument => {
+  if (!record.mint || record.mint.marketplaceUrl) return record;
+  const marketplaceUrl = buildMarketplaceTokenUrl(minting.config.marketplaceTokenUrlTemplate, record.mint.contractAddress, record.mint.tokenId);
+  return marketplaceUrl ? { ...record, mint: { ...record.mint, marketplaceUrl } } : record;
+};
 app.get('/api/rooms', (_request, response) => response.json(publicRooms()));
 app.get('/api/archive', async (request, response) => {
   const limit = z.coerce.number().int().min(1).max(100).catch(48).parse(request.query.limit);
-  const records = await artwork.listMinted(limit);
-  const items = records.map(toPanicArchiveItem);
+  const records = minting.config.contractAddress ? await artwork.listMinted(limit, minting.config.contractAddress) : [];
+  const items = records.map(withMarketplaceUrl).map(toPanicArchiveItem);
   return response.json({ collection: 'Sketch Arena: The Panic Archive', season: { id: 0, name: 'The First Mess' }, total: items.length, items });
 });
-app.get('/api/mint/status', (_request, response) => response.json(minting.status()));
+app.get('/api/archive/metadata', (_request, response) => {
+  const origin = minting.config.publicOrigin;
+  response.setHeader('cache-control', 'public, max-age=3600, stale-while-revalidate=86400');
+  return response.json({
+    name: 'Sketch Arena: The Panic Archive',
+    symbol: 'PANIC',
+    description: 'Original player-made disasters from Sketch Arena. Drawn under pressure, signed by the artist and archived on Shido.',
+    image: `${origin}/brand/app-icon-512.png`,
+    banner_image: `${origin}/social/draw-badly-become-legendary.png`,
+    external_link: `${origin}/archive`,
+  });
+});
+app.get('/api/mint/status', async (_request, response) => response.json(await minting.verifyInfrastructure()));
 app.get('/api/wallet', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request); if (!ownerSessionId) return response.status(401).json({ error: 'Player authentication required' });
   return response.json({ binding: await minting.binding(ownerSessionId) });
@@ -265,13 +302,17 @@ app.get('/api/progression', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request);
   if (!ownerSessionId) return response.status(401).json({ error: 'Player authentication required' });
   const player = await progression.getPlayer(ownerSessionId);
-  return player ? response.json(player) : response.status(404).json({ error: 'Player profile not found' });
+  return player ? response.json(publicProgression(player)) : response.status(404).json({ error: 'Player profile not found' });
 });
-app.get('/api/season/items', (_request, response) => response.json(SEASON_ITEMS));
+app.get('/api/season/items', (_request, response) => response.json(ACTIVE_SEASON_ITEMS));
+app.get('/api/leaderboards', async (request, response) => {
+  const period = leaderboardPeriodSchema.catch('weekly').parse(request.query.period);
+  return response.json(await progression.leaderboard(period, Date.now(), 100));
+});
 app.post('/api/progression/equip', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request); if (!ownerSessionId) return response.status(401).json({ error: 'Player authentication required' });
   const parsed = equipItemSchema.safeParse(request.body); if (!parsed.success) return response.status(400).json({ error: 'Cosmetic selection is invalid' });
-  try { return response.json(await progression.equipItem(ownerSessionId, parsed.data.itemId)); }
+  try { return response.json(publicProgression(await progression.equipItem(ownerSessionId, parsed.data.itemId))); }
   catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'Cosmetic could not be equipped' }); }
 });
 app.post('/api/progression/rewards/:rewardId/acknowledge', async (request, response) => {
@@ -279,16 +320,16 @@ app.post('/api/progression/rewards/:rewardId/acknowledge', async (request, respo
   if (!ownerSessionId) return response.status(401).json({ error: 'Player authentication required' });
   const rewardId = z.string().uuid().safeParse(request.params.rewardId);
   if (!rewardId.success) return response.status(400).json({ error: 'Reward ID is invalid' });
-  try { return response.json(await progression.acknowledge(ownerSessionId, rewardId.data)); }
+  try { return response.json(publicProgression(await progression.acknowledge(ownerSessionId, rewardId.data))); }
   catch { return response.status(404).json({ error: 'Reward not found' }); }
 });
 app.get('/api/artworks', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request);
   if (!ownerSessionId) return response.status(401).json({ error: 'Vault authentication required' });
-  return response.json(await artwork.listByOwner(ownerSessionId));
+  return response.json((await artwork.listByOwner(ownerSessionId)).map(withMarketplaceUrl));
 });
 const rewardFields = {
-  kind: z.enum(['mint-credit', 'mint-discount', 'xp', 'item', 'achievement', 'battle-pass']), amount: z.number().int().min(1).max(100_000),
+  kind: z.enum(['mint-credit', 'mint-discount', 'xp', 'item', 'achievement']), amount: z.number().int().min(1).max(100_000),
   discountBps: z.number().int().min(100).max(10_000).optional(),
   itemId: z.string().trim().min(2).max(80).optional(), reason: z.string().trim().min(3).max(240),
   campaignId: z.string().trim().min(2).max(80).optional(), expiresAt: z.number().int().positive().optional(),
@@ -304,6 +345,14 @@ app.post('/api/artworks', async (request, response) => {
   if (!parsed.success) return response.status(400).json({ error: 'Artwork package is invalid' });
   try { return response.status(201).json(await artwork.save({ ...parsed.data, ownerSessionId })); }
   catch (error) { return response.status(400).json({ error: error instanceof Error ? error.message : 'Could not save artwork' }); }
+});
+app.delete('/api/artworks/:artworkId', async (request, response) => {
+  const ownerSessionId = await playerIdFromRequest(request); if (!ownerSessionId) return response.status(401).json({ error: 'Vault authentication required' });
+  const artworkId = z.string().uuid().safeParse(request.params.artworkId); if (!artworkId.success) return response.status(400).json({ error: 'Artwork ID is invalid' });
+  const record = await artwork.get(artworkId.data);
+  if (!record || record.ownerSessionId !== ownerSessionId) return response.status(404).json({ error: 'Artwork not found in your Vault' });
+  try { await minting.releaseForArtworkDeletion(ownerSessionId, artworkId.data); } catch (error) { return sendMintError(response, error); }
+  return await artwork.deleteOwned(artworkId.data, ownerSessionId) ? response.status(204).send() : response.status(404).json({ error: 'Artwork not found in your Vault' });
 });
 app.post('/api/artworks/:artworkId/mint/prepare', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request); if (!ownerSessionId) return response.status(401).json({ error: 'Vault authentication required' });
@@ -331,7 +380,29 @@ app.get('/api/admin/overview', async (request, response) => {
 });
 app.get('/api/admin/players', async (request, response) => {
   if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
-  const search = z.string().max(80).catch('').parse(request.query.search); return response.json(await progression.listPlayers(search));
+  const search = z.string().max(80).catch('').parse(request.query.search); return response.json((await progression.listPlayers(search)).map(publicProgression));
+});
+app.get('/api/admin/leaderboard-prizes/preview', async (request, response) => {
+  if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
+  const period = z.enum(['weekly', 'monthly']).catch('weekly').parse(request.query.period);
+  const board = await progression.leaderboard(period, closedPeriodReference(period, Date.now()), 10);
+  return response.json({ ...board, label: `Most recently closed ${period === 'weekly' ? 'week' : 'month'} · ${board.periodKey}` });
+});
+app.post('/api/admin/leaderboard-prizes/award', async (request, response) => {
+  const principal = authorizeAdmin(request.headers.authorization, request.ip, 'admin'); if (!principal) return response.status(adminStatus()).json({ error: adminError('admin') });
+  const parsed = z.object({ period: z.enum(['weekly', 'monthly']), periodKey: z.string().min(4).max(16), confirmation: z.literal('AWARD LEADERBOARD PRIZES') }).safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: 'Prize confirmation is invalid' });
+  const board = await progression.leaderboard(parsed.data.period, closedPeriodReference(parsed.data.period, Date.now()), 10);
+  if (board.periodKey !== parsed.data.periodKey) return response.status(409).json({ error: 'That leaderboard period is no longer current. Preview again.' });
+  const winners = board.entries.filter((entry) => entry.rank <= 3); const results: Array<{ sessionId: string; name: string; rank: number; granted: number }> = [];
+  for (const winner of winners) {
+    const prefix = `leaderboard-${board.period}-${board.periodKey}-rank-${winner.rank}`;
+    const badge = await progression.grant({ sessionIds: [winner.sessionId], kind: 'achievement', amount: 1, itemId: `${prefix}-badge`, reason: `${board.label} · leaderboard rank #${winner.rank}`, campaignId: `${prefix}-badge`, idempotencyKey: `${prefix}-${winner.sessionId}-badge`, actor: `backstage:${principal.name}` });
+    const value = board.period === 'weekly' ? [750, 500, 300][winner.rank - 1]! : [2, 1, 1][winner.rank - 1]!;
+    const reward = await progression.grant({ sessionIds: [winner.sessionId], kind: board.period === 'weekly' ? 'xp' : 'mint-credit', amount: value, reason: `${board.label} · leaderboard prize #${winner.rank}`, campaignId: `${prefix}-reward`, idempotencyKey: `${prefix}-${winner.sessionId}-reward`, actor: `backstage:${principal.name}` });
+    results.push({ sessionId: winner.sessionId, name: winner.name, rank: winner.rank, granted: badge.granted + reward.granted });
+  }
+  return response.status(201).json({ period: board.period, periodKey: board.periodKey, winners: results });
 });
 app.post('/api/admin/grants', async (request, response) => {
   const principal = authorizeAdmin(request.headers.authorization, request.ip, 'operator'); if (!principal) return response.status(adminStatus()).json({ error: adminError('operator') });
@@ -378,11 +449,15 @@ app.post('/api/admin/contract-access/prepare', (request, response) => {
   const parsed = contractAccessSchema.safeParse(request.body); if (!parsed.success) return response.status(400).json({ error: 'Contract access action is invalid' });
   try { return response.json(minting.prepareContractAccessTransaction(parsed.data)); } catch (error) { return sendMintError(response, error); }
 });
+app.get('/api/admin/contract-deployment/prepare', (request, response) => {
+  const principal = authorizeAdmin(request.headers.authorization, request.ip, 'admin'); if (!principal) return response.status(adminStatus()).json({ error: adminError('admin') });
+  try { return response.json(preparePanicArchiveDeployment(minting.config)); } catch (error) { return sendMintError(response, error); }
+});
 
 io.on('connection', (socket) => {
   let sessionId: string | null = null;
   let playerName = '';
-  let avatarItem: string | undefined;
+  let equipped: { avatar?: string; title?: string; frame?: string; reaction?: string } = {};
 
   socket.on('session:resume', async (payload, ack) => {
     const parsed = sessionSchema.safeParse(payload);
@@ -390,17 +465,21 @@ io.on('connection', (socket) => {
     const device = await accounts.fromSessionToken(cookieValue(socket.handshake.headers.cookie, SESSION_COOKIE));
     if (device) {
       sessionId = device.account.id;
-      if (device.account.name !== parsed.data.name) await accountRepository.saveAccount({ ...device.account, name: parsed.data.name, updatedAt: Date.now() });
-    } else if (parsed.data.credential) sessionId = sessionIdFromCredential(parsed.data.credential);
+      playerName = device.account.name;
+    } else if (parsed.data.credential) {
+      const legacyAccount = await accounts.fromLegacyCredential(parsed.data.credential);
+      if (!legacyAccount) return ack({ ok: false, error: 'Your player session expired—restore this Vault or choose a new name' });
+      sessionId = legacyAccount.id;
+      playerName = legacyAccount.name;
+    }
     else return ack({ ok: false, error: 'Your player session expired—sign in again' });
-    playerName = parsed.data.name;
-    try { avatarItem = (await progression.ensurePlayer(sessionId, playerName)).equipped.avatar; }
+    try { equipped = (await progression.ensurePlayer(sessionId, playerName)).equipped; }
     catch { return ack({ ok: false, error: 'Could not load your player profile' }); }
-    ack({ ok: true, data: { sessionId } });
+    ack({ ok: true, data: { sessionId, name: playerName } });
     for (const room of rooms.values()) {
       if (!room.hasSession(sessionId)) continue;
       const replacedSocketId = room.socketIdForSession(sessionId);
-      room.join(sessionId, socket.id, playerName, avatarItem);
+      room.join(sessionId, socket.id, playerName, equipped);
       socket.join(room.id);
       if (replacedSocketId && replacedSocketId !== socket.id) {
         const replacedSocket = io.sockets.sockets.get(replacedSocketId);
@@ -417,19 +496,20 @@ io.on('connection', (socket) => {
 
   socket.on('rooms:subscribe', () => socket.emit('rooms:list', publicRooms()));
 
-  socket.on('room:create', (payload, ack) => guarded(socket.id, ack, () => {
+  socket.on('room:create', (payload, ack) => guarded(socket.id, ack, async () => {
     requireSession(sessionId);
     requireCurrentSocketOrNoRoom(sessionId, socket.id);
     const input = roomCreateSchema.parse(payload);
+    equipped = (await progression.getPlayer(sessionId!))?.equipped ?? equipped;
     leaveCurrent(sessionId!, socket.id);
     const room = new GameRoom(input.name, input.category, input.isPrivate, input.maxPlayers, input.roundSeconds * 1000);
     rooms.set(room.id, room); bindRoom(room);
-    socket.join(room.id); room.join(sessionId!, socket.id, playerName, avatarItem); socket.emit('room:state', room.view());
+    socket.join(room.id); room.join(sessionId!, socket.id, playerName, equipped); socket.emit('room:state', room.view());
     broadcastRooms();
     return { room: room.view(), inviteCode: room.inviteCode ?? undefined };
   }));
 
-  socket.on('room:join', (payload, ack) => guarded(socket.id, ack, () => {
+  socket.on('room:join', (payload, ack) => guarded(socket.id, ack, async () => {
     requireSession(sessionId);
     requireCurrentSocketOrNoRoom(sessionId, socket.id);
     const input = roomJoinSchema.parse(payload);
@@ -438,8 +518,9 @@ io.on('connection', (socket) => {
       : rooms.get(input.roomId!);
     if (!room) throw new Error('Arena not found');
     if (room.isPrivate && room.inviteCode !== input.inviteCode?.toUpperCase()) throw new Error('Invite code required');
+    equipped = (await progression.getPlayer(sessionId!))?.equipped ?? equipped;
     leaveCurrent(sessionId!, socket.id);
-    socket.join(room.id); room.join(sessionId!, socket.id, playerName, avatarItem); socket.emit('room:state', room.view()); broadcastRooms();
+    socket.join(room.id); room.join(sessionId!, socket.id, playerName, equipped); socket.emit('room:state', room.view()); broadcastRooms();
     return { room: room.view() };
   }));
 
@@ -475,7 +556,8 @@ io.on('connection', (socket) => {
   }));
   socket.on('chat:send', (payload, ack) => guarded(socket.id, ack, () => { const input = textSchema.parse(payload); currentRoomForSocket(sessionId, socket.id).sendChat(sessionId!, input.text); return undefined; }));
   socket.on('reaction:send', (payload, ack) => guarded(socket.id, ack, () => {
-    const emoji = z.enum(['😂', '🔥', '💀', '👏', '🤯', '❤️']).parse(payload.emoji); currentRoomForSocket(sessionId, socket.id).react(sessionId!, emoji); return undefined;
+    const allowed = ['😂', '🔥', '💀', '👏', '🤯', '❤️', ...(equipped.reaction === 'screaming-pencil-reaction' ? ['✏️'] : []), ...(equipped.reaction === 'tiny-fire-reaction' ? ['🧨'] : [])];
+    const emoji = z.string().refine((value) => allowed.includes(value), 'That reaction is not unlocked').parse(payload.emoji); currentRoomForSocket(sessionId, socket.id).react(sessionId!, emoji); return undefined;
   }));
   socket.on('draw:stroke', (stroke, ack) => guarded(socket.id, ack, () => {
     if (!drawLimit.take(socket.id)) throw new Error('Too many marks arrived at once—try that stroke again');
@@ -490,7 +572,7 @@ io.on('connection', (socket) => {
     const round = room.rounds.find((value) => value.roundId === input.roundId)!;
     return artwork.save({ ownerSessionId: sessionId!, origin: 'arena', status: 'gallery', title: round.prompt, canvasRatio: room.canvasRatio,
       width: 1200, height: 1200, strokes: round.strokes, sourceRoundId: round.roundId });
-  }));
+  }, false));
 
   socket.on('disconnect', () => {
     if (!sessionId) return;
@@ -517,8 +599,13 @@ function bindRoom(room: GameRoom): void {
 
 async function awardMatchProgress(result: MatchResult): Promise<void> {
   const fastestGuess = result.rounds.flatMap((round) => round.correct).sort((a, b) => a.elapsedMs - b.elapsedMs)[0];
+  await progression.recordMatch({ matchId: result.matchId, endedAt: Math.max(...result.rounds.map((round) => round.endedAt), Date.now()), players: result.standings.map((player) => ({
+    sessionId: player.sessionId, gamePoints: player.score, won: result.winners.some((winner) => winner.sessionId === player.sessionId), sharedWin: result.winners.length > 1 && result.winners.some((winner) => winner.sessionId === player.sessionId),
+    correctGuesses: result.rounds.reduce((total, round) => total + Number(round.correct.some((guess) => guess.playerId === player.id)), 0), fastestGuesses: fastestGuess && result.rounds.some((round) => round.correct.some((guess) => guess.playerId === player.id && guess.elapsedMs === fastestGuess.elapsedMs)) ? 1 : 0,
+    drawings: result.rounds.filter((round) => round.drawerId === player.id && round.reason !== 'drawer-left').length,
+  })) });
   for (const player of result.standings) {
-    const matchKey = `match-${result.roomId}-${player.sessionId}`;
+    const matchKey = `match-${result.matchId}-${player.sessionId}`;
     const xp = 100 + Math.min(400, Math.floor(player.score / 100) * 25);
     await progression.grant({ sessionIds: [player.sessionId], kind: 'xp', amount: xp, reason: `Finished a match · +${xp} Season XP`, campaignId: `${matchKey}-xp`, idempotencyKey: `${matchKey}-xp`, actor: 'system:match' });
     await progression.grant({ sessionIds: [player.sessionId], kind: 'achievement', amount: 1, itemId: 'first-mess', reason: 'Played your first complete Sketch Arena match', campaignId: 'achievement-first-mess', idempotencyKey: `${matchKey}-first-mess`, actor: 'system:match' });
@@ -568,13 +655,19 @@ async function playerAccountFromRequest(request: express.Request) {
   return accounts.fromSessionToken(cookieValue(request.headers.cookie, SESSION_COOKIE));
 }
 async function playerIdFromRequest(request: express.Request): Promise<string | null> {
-  const account = await playerAccountFromRequest(request); return account?.account.id ?? sessionFromAuthorization(request.headers.authorization);
+  const account = await playerAccountFromRequest(request); return account?.account.id ?? null;
 }
 function setPlayerCookie(response: express.Response, token: string, expiresAt: number): void {
   response.cookie(SESSION_COOKIE, token, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'lax', path: '/', expires: new Date(expiresAt), priority: 'high' });
 }
 function clearPlayerCookie(response: express.Response): void { response.clearCookie(SESSION_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'lax', path: '/' }); }
 function publicAccount(account: { id: string; name: string; securedAt?: number; createdAt: number }, sessionId: string) { return { id: account.id, name: account.name, secured: Boolean(account.securedAt), securedAt: account.securedAt, createdAt: account.createdAt, sessionId }; }
+function publicProgression(player: PlayerProgress): PlayerProgress {
+  const secretCampaign = 'season-0-founding-weirdos-season-1-premium';
+  const visibleItemIds = new Set<string>(ACTIVE_SEASON_ITEMS.map((item) => item.id));
+  const equipped = Object.fromEntries(Object.entries(player.equipped).filter(([, itemId]) => itemId && visibleItemIds.has(itemId))) as PlayerProgress['equipped'];
+  return { ...player, battlePass: 'free', passEntitlements: player.passEntitlements.filter((value) => value !== 'season-1-premium' && value !== 'season-0-premium'), items: player.items.filter((itemId) => visibleItemIds.has(itemId)), equipped, rewards: player.rewards.filter((reward) => reward.campaignId !== secretCampaign && reward.kind !== 'battle-pass' && !reward.campaignId?.startsWith('season-0-premium-')) };
+}
 function authorizeAdmin(authorization: string | undefined, ip: string | undefined, required: BackstageRole) {
   if (!adminLimit.take(ip ?? 'unknown')) return null;
   return backstageAuth.authorize(authorization, required);
@@ -587,9 +680,10 @@ function authorizeMetrics(authorization: string | undefined): boolean {
   return timingSafeEqual(METRICS_TOKEN_HASH, createHash('sha256').update(supplied).digest());
 }
 function prometheusLabel(value: string): string { return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', '\\n').slice(0, 120); }
+function closedPeriodReference(period: 'weekly' | 'monthly', now: number): number { if (period === 'weekly') return now - 7 * 86_400_000; const date = new Date(now); return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() - 1, 15); }
 function sendMintError(response: express.Response, error: unknown): express.Response { return response.status(error instanceof MintServiceError ? error.status : 500).json({ error: error instanceof Error ? error.message : 'Minting could not continue' }); }
-function guarded<T>(key: string, ack: (value: { ok: boolean; data?: T; error?: string }) => void, action: () => T | Promise<T>): void {
-  if (!actionLimit.take(key)) { metricCounters.rateLimited += 1; metricCounters.socketRejected += 1; return ack({ ok: false, error: 'Slow down for a moment' }); }
+function guarded<T>(key: string, ack: (value: { ok: boolean; data?: T; error?: string }) => void, action: () => T | Promise<T>, useGeneralLimit = true): void {
+  if (useGeneralLimit && !actionLimit.take(key)) { metricCounters.rateLimited += 1; metricCounters.socketRejected += 1; return ack({ ok: false, error: 'Slow down for a moment' }); }
   Promise.resolve().then(action).then((data) => ack({ ok: true, data }), (error: unknown) => { metricCounters.socketRejected += 1; ack({ ok: false, error: error instanceof Error ? error.message : 'Something went wrong' }); });
 }
 

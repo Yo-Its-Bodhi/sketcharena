@@ -21,6 +21,8 @@ interface PlayerRecord {
   name: string;
   avatarSeed: number;
   avatarItem?: string;
+  titleItem?: string;
+  frameItem?: string;
   score: number;
   roundScore: number;
   streak: number;
@@ -67,6 +69,7 @@ export class GameRoom {
   private drawerTurns = new Map<string, number>();
   private kickedSessions = new Set<string>();
   private startedAt = 0;
+  private matchId = '';
   private pausedRoundRemainingMs: number | null = null;
   private timer: NodeJS.Timeout | null = null;
   private hintTimers: NodeJS.Timeout[] = [];
@@ -99,7 +102,8 @@ export class GameRoom {
     set?.forEach((handler) => handler(...args));
   }
 
-  join(sessionId: string, socketId: string, name: string, avatarItem?: string): PlayerView {
+  join(sessionId: string, socketId: string, name: string, cosmeticsInput?: string | { avatar?: string; title?: string; frame?: string }): PlayerView {
+    const cosmetics = typeof cosmeticsInput === 'string' ? { avatar: cosmeticsInput } : cosmeticsInput;
     if (this.kickedSessions.has(sessionId)) throw new Error('The host removed you from this arena');
     const returning = [...this.players.values()].find((player) => player.sessionId === sessionId);
     if (returning) {
@@ -107,7 +111,9 @@ export class GameRoom {
       returning.connected = true;
       returning.disconnectAt = null;
       returning.name = name;
-      returning.avatarItem = avatarItem;
+      returning.avatarItem = cosmetics?.avatar;
+      returning.titleItem = cosmetics?.title;
+      returning.frameItem = cosmetics?.frame;
       if (this.phase === 'paused' && this.connectedPlayerCount() >= GAME.minPlayers) {
         if (this.pausedRoundRemainingMs !== null) this.resumeDrawing();
         else this.beginCountdown();
@@ -118,7 +124,7 @@ export class GameRoom {
     if (this.phase !== 'lobby') throw new Error('This match is already underway');
     if (this.players.size >= this.maxPlayers) throw new Error('The arena is full');
     const player: PlayerRecord = {
-      id: randomUUID().slice(0, 12), socketId, sessionId, name, avatarSeed: Math.floor(this.random() * 10_000), avatarItem,
+      id: randomUUID().slice(0, 12), socketId, sessionId, name, avatarSeed: Math.floor(this.random() * 10_000), avatarItem: cosmetics?.avatar, titleItem: cosmetics?.title, frameItem: cosmetics?.frame,
       score: 0, roundScore: 0, streak: 0, maxStreak: 0, connected: true, disconnectAt: null, ready: false,
     };
     this.players.set(player.id, player);
@@ -207,6 +213,7 @@ export class GameRoom {
     if (this.phase !== 'lobby') throw new Error('The match has already started');
     if (this.connectedPlayerCount() < GAME.minPlayers) throw new Error('At least two players are required');
     this.rounds.length = 0;
+    this.matchId = randomUUID();
     this.keptRoundIds.clear();
     this.round = 0;
     this.totalRounds = GAME.matchRounds;
@@ -500,11 +507,11 @@ export class GameRoom {
         : leaderMetric!.correct !== runnerMetric!.correct
           ? { rule: 'correct-guesses' as const, label: 'Score tied — more correct guesses broke it.' }
           : { rule: 'fastest-total' as const, label: 'Score and solves tied — fastest combined solve time won.' };
-    return { roomId: this.id, rounds: [...this.rounds], standings, winner: winners[0] ?? null, winners, tieBreak };
+    return { matchId: this.matchId, roomId: this.id, rounds: [...this.rounds], standings, winner: winners[0] ?? null, winners, tieBreak };
   }
   private playerView(player: PlayerRecord): PlayerView {
     const cosmeticSeed = player.avatarItem === 'yellow-weirdo-avatar' || player.avatarItem === 'golden-chaos-avatar' ? 1 : player.avatarItem === 'green-chaos-avatar' ? 2 : player.avatarSeed;
-    return { id: player.id, sessionId: player.sessionId, name: player.name, avatarSeed: cosmeticSeed, avatarItem: player.avatarItem, score: player.score,
+    return { id: player.id, sessionId: player.sessionId, name: player.name, avatarSeed: cosmeticSeed, avatarItem: player.avatarItem, titleItem: player.titleItem, frameItem: player.frameItem, score: player.score,
       roundScore: player.roundScore, streak: player.streak, isHost: player.id === this.hostId, isDrawer: player.id === this.drawerId,
       hasGuessed: this.correct.has(player.id), connected: player.connected, ready: player.ready };
   }

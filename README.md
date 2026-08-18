@@ -5,6 +5,8 @@ A server-authoritative social drawing game with public/private rooms, live strok
 Public-room safety includes host removal with room-level re-entry prevention and a private player-report flow. Reports resolve server-authoritative room identities, are rate-limited and deduplicated, and enter a protected Backstage queue where named operators record review decisions without exposing the report to the room.
 
 The current requirement-by-requirement release decision and external NFT handoff are tracked in [`RELEASE_READINESS.md`](./RELEASE_READINESS.md).
+
+Player and support responsibilities for passkeys, device sessions and emergency Vault recovery are defined in [`ACCOUNT_RECOVERY_POLICY.md`](./ACCOUNT_RECOVERY_POLICY.md).
 The contract review package and unresolved deployment parameters are tracked in [`PANIC_ARCHIVE_AUDIT_HANDOFF.md`](./PANIC_ARCHIVE_AUDIT_HANDOFF.md).
 The fail-closed USD Premium Panic Pass sale design and remaining provider evidence are tracked in [`BATTLE_PASS_COMMERCE.md`](./BATTLE_PASS_COMMERCE.md).
 
@@ -71,7 +73,7 @@ The contract compile is verification only and never deploys. Solidity, Ethers, O
 - Rooms are intentionally in-memory today. A server restart ends active matches. Redis-backed room snapshots are the next infrastructure step if zero-downtime match recovery is required.
 - The Studio keeps all professional controls reachable on phones: its mobile workspace dock opens format, brush/color and layer panels without shrinking the drawing surface.
 
-Production-ready starting points are included in `deploy/nginx-sketch-arena.conf.example`, `deploy/sketch-arena.service.example`, and the PostgreSQL backup service/timer examples. Replace the example host/certificate paths, store secrets in `/etc/sketch-arena/server.env`, provision PostgreSQL plus a separate protected backup volume, and install `pg_dump`/`pg_restore`. Production startup rejects missing or unavailable PostgreSQL. The server emits one-line JSON logs with request IDs and lifecycle events for journal/collector ingestion; it never writes wallet credentials, voucher signing keys, promo codes, session tokens or Vault recovery keys to logs.
+Production-ready starting points are included in `deploy/nginx-sketch-arena.conf.example`, `deploy/sketch-arena.service.example`, `deploy/sketch-arena-node-runtime.conf`, and the PostgreSQL backup service/timer examples. Replace the example host/certificate paths, store secrets in `/etc/sketch-arena/server.env`, provision PostgreSQL plus a separate protected backup volume, install `pg_dump`/`pg_restore`, and use a checksum-verified supported Node LTS runtime dedicated to Sketch Arena rather than replacing the VPS system Node. Production startup rejects missing or unavailable PostgreSQL. The server emits one-line JSON logs with request IDs and lifecycle events for journal/collector ingestion; it never writes wallet credentials, voucher signing keys, promo codes, session tokens or Vault recovery keys to logs.
 
 ## Shido / NFT Studio integration boundary
 
@@ -84,7 +86,7 @@ Production-ready starting points are included in `deploy/nginx-sketch-arena.conf
 5. independently reads the Shido receipt and matching `PanicArchiveMinted` event before consuming a Mint Credit or marking the artwork minted;
 6. creates a marketplace link only from an explicitly configured, verified token URL template.
 
-The planned collection is **Sketch Arena: The Panic Archive**, with seasons represented inside one permanent collection (Season 0: **The First Mess**). Mint Credits, Battle Pass rewards and signed-voucher eligibility are modeled off-chain now. The server returns a deliberate `503` and the UI explains that setup is incomplete until every required production value in `.env.example` is supplied. No contract has been deployed by this repository.
+The live collection is **Sketch Arena: The Panic Archive**, with seasons represented inside one permanent collection (Season 0: **The First Mess**). Mint Credits, Battle Pass rewards and signed-voucher eligibility are resolved server-side, while the player submits the signed redemption from their own wallet. The server still fails closed with `503` whenever required production configuration is incomplete. The deployed address and independently rechecked evidence live in `PANIC_ARCHIVE_MAINNET_EVIDENCE.md`.
 
 Backstage can issue direct Mint Credits, percentage-discount entitlements, individual rewards, preview-confirmed global drops, and redeemable promo campaigns. Discounts never alter the transaction in the browser: the server resolves the best valid benefit and signs the final reduced voucher price. Promo redemption is rate-limited and does not require a wallet.
 

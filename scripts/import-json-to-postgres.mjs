@@ -50,7 +50,7 @@ async function importSource(client, name, data) {
 
 async function importAccounts(client, state) {
   let rows = 0;
-  for (const value of state.accounts ?? []) { rows += changed(await client.query('insert into player_accounts(id,name,legacy_credential_hash,secured_at,created_at,updated_at) values($1,$2,$3,$4,$5,$6) on conflict do nothing', [value.id, value.name, value.legacyCredentialHash ?? null, date(value.securedAt), date(value.createdAt), date(value.updatedAt)])); }
+  for (const value of state.accounts ?? []) { rows += changed(await client.query('insert into player_accounts(id,name,name_key,legacy_credential_hash,secured_at,created_at,updated_at) values($1,$2,$3,$4,$5,$6,$7) on conflict do nothing', [value.id, value.name, nameKey(value.name), value.legacyCredentialHash ?? null, date(value.securedAt), date(value.createdAt), date(value.updatedAt)])); }
   for (const value of state.sessions ?? []) { rows += changed(await client.query('insert into player_device_sessions(id,account_id,token_hash,label,created_at,last_seen_at,expires_at,revoked_at) values($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing', [value.id, value.accountId, value.tokenHash, value.label, date(value.createdAt), date(value.lastSeenAt), date(value.expiresAt), date(value.revokedAt)])); }
   for (const value of state.passkeys ?? []) { rows += changed(await client.query('insert into player_passkeys(id,account_id,webauthn_user_id,public_key,counter,device_type,backed_up,transports,label,created_at,last_used_at) values($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11) on conflict do nothing', [value.id, value.accountId, value.webauthnUserId, value.publicKey, value.counter, value.deviceType, value.backedUp, JSON.stringify(value.transports ?? []), value.label, date(value.createdAt), date(value.lastUsedAt)])); }
   for (const value of state.challenges ?? []) { rows += changed(await client.query('insert into account_challenges(id,kind,challenge,account_id,created_at,expires_at) values($1,$2,$3,$4,$5,$6) on conflict do nothing', [value.id, value.kind, value.challenge, value.accountId ?? null, date(value.createdAt), date(value.expiresAt)])); }
@@ -84,5 +84,6 @@ async function importReports(client, state) { let rows = 0; for (const value of 
 
 const date = (milliseconds) => milliseconds === undefined ? null : new Date(milliseconds);
 const changed = (result) => Number(result.rowCount ?? 0);
+const nameKey = (value) => String(value).normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US');
 async function main() { const sources = await loadLegacySources(); if (!sources.length) { console.log('No legacy JSON sources found; nothing to import'); return; } const summary = await importLegacySources(process.env.DATABASE_URL, sources); console.log(JSON.stringify({ ok: true, sources: summary })); }
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) main().catch((error) => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; });

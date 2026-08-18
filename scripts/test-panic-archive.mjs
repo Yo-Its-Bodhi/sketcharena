@@ -11,14 +11,14 @@ let solc;
 let ethers;
 try { solc = require('solc'); } catch { solc = require(resolve(siblingModules, 'solc')); }
 try { ethers = require('ethers'); } catch { ethers = require(resolve(siblingModules, 'ethers')); }
-const { ContractFactory, JsonRpcProvider, NonceManager, TypedDataEncoder, Wallet, ZeroAddress, id, keccak256, parseEther, toUtf8Bytes } = ethers;
+const { ContractFactory, JsonRpcProvider, NonceManager, MaxUint256, TypedDataEncoder, Wallet, ZeroAddress, id, keccak256, parseEther, toUtf8Bytes } = ethers;
 
 const contractSource = readFileSync(resolve(process.cwd(), 'contracts', 'SketchArenaPanicArchive.sol'), 'utf8');
 const reentrantReceiverSource = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 interface IPanicArchive {
   struct MintVoucher { address recipient; bytes32 tokenURIHash; bytes32 artworkHash; uint256 price; uint256 nonce; uint256 deadline; uint32 seasonId; bytes32 campaignId; }
-  function redeem(MintVoucher calldata voucher, string calldata tokenURI, bytes calldata signature) external payable returns (uint256);
+  function redeem(MintVoucher calldata voucher, string calldata tokenURI, bytes calldata signature) external returns (uint256);
 }
 contract ReentrantReceiver {
   IPanicArchive public immutable archive;
@@ -28,9 +28,9 @@ contract ReentrantReceiver {
   bool public reentrySucceeded;
   bool private armed;
   constructor(address archive_) { archive = IPanicArchive(archive_); }
-  function attack(IPanicArchive.MintVoucher calldata voucher_, string calldata tokenURI_, bytes calldata signature_) external payable {
+  function attack(IPanicArchive.MintVoucher calldata voucher_, string calldata tokenURI_, bytes calldata signature_) external {
     voucher = voucher_; tokenURI = tokenURI_; signature = signature_; armed = true;
-    archive.redeem{value: msg.value}(voucher_, tokenURI_, signature_);
+    archive.redeem(voucher_, tokenURI_, signature_);
     armed = false;
   }
   function onERC721Received(address, address, uint256, bytes calldata) external returns (bytes4) {
@@ -40,9 +40,15 @@ contract ReentrantReceiver {
     }
     return this.onERC721Received.selector;
   }
-}
-contract RejectingReceiver { receive() external payable { revert("NOPE"); } }`;
-const input = { language: 'Solidity', sources: { 'contracts/SketchArenaPanicArchive.sol': { content: contractSource }, 'contracts/test/ReentrantReceiver.sol': { content: reentrantReceiverSource } }, settings: { optimizer: { enabled: true, runs: 200 }, outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } } };
+}`;
+const mockTokenSource = `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+contract MockWSHIDO is ERC20 {
+  constructor() ERC20("Wrapped Shido", "WSHIDO") {}
+  function mint(address recipient, uint256 amount) external { _mint(recipient, amount); }
+}`;
+const input = { language: 'Solidity', sources: { 'contracts/SketchArenaPanicArchive.sol': { content: contractSource }, 'contracts/test/ReentrantReceiver.sol': { content: reentrantReceiverSource }, 'contracts/test/MockWSHIDO.sol': { content: mockTokenSource } }, settings: { evmVersion: 'paris', optimizer: { enabled: true, runs: 200 }, outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } } } };
 const findImport = (name) => {
   for (const candidate of [resolve(process.cwd(), name), resolve(process.cwd(), 'node_modules', name), resolve(siblingModules, name)]) {
     try { return { contents: readFileSync(candidate, 'utf8') }; } catch { /* continue */ }
@@ -54,29 +60,32 @@ const errors = (output.errors ?? []).filter((item) => item.severity === 'error')
 if (errors.length) throw new Error(errors.map((item) => item.formattedMessage).join('\n'));
 const compiled = output.contracts['contracts/SketchArenaPanicArchive.sol'].SketchArenaPanicArchive;
 const compiledReceiver = output.contracts['contracts/test/ReentrantReceiver.sol'].ReentrantReceiver;
-const compiledRejector = output.contracts['contracts/test/ReentrantReceiver.sol'].RejectingReceiver;
+const compiledToken = output.contracts['contracts/test/MockWSHIDO.sol'].MockWSHIDO;
 
 const provider = new JsonRpcProvider(process.env.PANIC_ARCHIVE_RPC ?? 'http://127.0.0.1:8546');
 const signingWallet = new Wallet('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80', provider);
 const owner = new NonceManager(signingWallet);
-const ownerRpc = await provider.getSigner(0);
+const freshOwner = () => provider.getSigner(0);
 const recipient = await provider.getSigner(1);
 const recipientAddress = await recipient.getAddress();
-const expectDeploymentFailure = async (deploymentFactory, args, label) => {
+const expectDeploymentFailure = async (args, label) => {
   let reverted = false;
-  try { await deploymentFactory.deploy(...args); } catch { reverted = true; }
+  try { await new ContractFactory(compiled.abi, `0x${compiled.evm.bytecode.object}`, await provider.getSigner(0)).deploy(...args); } catch { reverted = true; }
   assert.equal(reverted, true, `${label} deployment should revert`);
 };
 const factory = new ContractFactory(compiled.abi, `0x${compiled.evm.bytecode.object}`, owner);
-const rejectionFactory = new ContractFactory(compiled.abi, `0x${compiled.evm.bytecode.object}`, ownerRpc);
-await expectDeploymentFailure(rejectionFactory, [ZeroAddress, signingWallet.address, signingWallet.address, 100, parseEther('1'), 'ipfs://panic-archive/collection.json', signingWallet.address, 500], 'zero owner');
-await expectDeploymentFailure(rejectionFactory, [signingWallet.address, ZeroAddress, signingWallet.address, 100, parseEther('1'), 'ipfs://panic-archive/collection.json', signingWallet.address, 500], 'zero signer');
-await expectDeploymentFailure(rejectionFactory, [signingWallet.address, signingWallet.address, ZeroAddress, 100, parseEther('1'), 'ipfs://panic-archive/collection.json', signingWallet.address, 500], 'zero payout receiver');
-await expectDeploymentFailure(rejectionFactory, [signingWallet.address, signingWallet.address, signingWallet.address, 0, parseEther('1'), 'ipfs://panic-archive/collection.json', signingWallet.address, 500], 'zero supply');
-await expectDeploymentFailure(rejectionFactory, [signingWallet.address, signingWallet.address, signingWallet.address, 100, parseEther('1'), '', signingWallet.address, 500], 'empty collection metadata');
-await expectDeploymentFailure(rejectionFactory, [signingWallet.address, signingWallet.address, signingWallet.address, 100, parseEther('1'), 'ipfs://panic-archive/collection.json', signingWallet.address, 1_001], 'royalty above cap');
-await expectDeploymentFailure(rejectionFactory, [signingWallet.address, signingWallet.address, signingWallet.address, 100, parseEther('1'), 'ipfs://panic-archive/collection.json', ZeroAddress, 500], 'zero royalty receiver');
-const archive = await factory.deploy(signingWallet.address, signingWallet.address, signingWallet.address, 100, parseEther('1'), 'ipfs://panic-archive/collection.json', signingWallet.address, 500);
+const tokenFactory = new ContractFactory(compiledToken.abi, `0x${compiledToken.evm.bytecode.object}`, owner);
+const paymentToken = await tokenFactory.deploy(); await paymentToken.waitForDeployment(); const paymentTokenAddress = await paymentToken.getAddress();
+const args = [signingWallet.address, signingWallet.address, signingWallet.address, paymentTokenAddress, 100, parseEther('1'), 'ipfs://panic-archive/collection.json', 500];
+await expectDeploymentFailure([ZeroAddress, ...args.slice(1)], 'zero owner');
+await expectDeploymentFailure([signingWallet.address, ZeroAddress, ...args.slice(2)], 'zero signer');
+await expectDeploymentFailure([signingWallet.address, signingWallet.address, ZeroAddress, ...args.slice(3)], 'zero payout receiver');
+await expectDeploymentFailure([signingWallet.address, signingWallet.address, signingWallet.address, ZeroAddress, ...args.slice(4)], 'zero payment token');
+await expectDeploymentFailure([signingWallet.address, signingWallet.address, signingWallet.address, recipientAddress, ...args.slice(4)], 'EOA payment token');
+await expectDeploymentFailure([...args.slice(0, 4), 0, ...args.slice(5)], 'zero supply');
+await expectDeploymentFailure([...args.slice(0, 6), '', ...args.slice(7)], 'empty collection metadata');
+await expectDeploymentFailure([...args.slice(0, 7), 1_001], 'royalty above cap');
+const archive = await factory.deploy(...args);
 await archive.waitForDeployment();
 const contractAddress = await archive.getAddress();
 const network = await provider.getNetwork();
@@ -105,24 +114,20 @@ const unauthorizedOwnerActions = [
   ['payout receiver', () => archive.connect(recipient).setPayoutReceiver(recipientAddress)],
   ['collection metadata', () => archive.connect(recipient).setCollectionMetadataURI('ipfs://unauthorized.json')],
   ['metadata freeze', () => archive.connect(recipient).freezeCollectionMetadata()],
-  ['royalty update', () => archive.connect(recipient).setRoyalty(recipientAddress, 100)],
-  ['royalty removal', () => archive.connect(recipient).removeRoyalty()],
-  ['royalty lock', () => archive.connect(recipient).lockRoyalty()],
   ['pause', () => archive.connect(recipient).pause()],
-  ['withdrawal', () => archive.connect(recipient).withdraw()],
 ];
 for (const [label, action] of unauthorizedOwnerActions) await expectRevert(action, `unauthorized ${label}`);
-await expectRevert(() => archive.connect(ownerRpc).setMintSigner(ZeroAddress), 'zero mint signer update');
-await expectRevert(() => archive.connect(ownerRpc).setPayoutReceiver(ZeroAddress), 'zero payout receiver update');
-await expectRevert(() => archive.connect(ownerRpc).setRecipientBlocked(ZeroAddress, true), 'zero block recipient');
-await expectRevert(() => archive.connect(ownerRpc).setRecipientApproved(ZeroAddress, true), 'zero approved recipient');
-await expectRevert(() => archive.connect(ownerRpc).setCollectionMetadataURI(''), 'empty collection metadata update');
-await expectRevert(() => archive.connect(ownerRpc).setRoyalty(ZeroAddress, 100), 'zero royalty receiver update');
-await expectRevert(() => archive.connect(ownerRpc).setRoyalty(signingWallet.address, 1_001), 'royalty update above cap');
+await expectRevert(async () => archive.connect(await freshOwner()).setMintSigner(ZeroAddress), 'zero mint signer update');
+await expectRevert(async () => archive.connect(await freshOwner()).setPayoutReceiver(ZeroAddress), 'zero payout receiver update');
+await expectRevert(async () => archive.connect(await freshOwner()).setRecipientBlocked(ZeroAddress, true), 'zero block recipient');
+await expectRevert(async () => archive.connect(await freshOwner()).setRecipientApproved(ZeroAddress, true), 'zero approved recipient');
+await expectRevert(async () => archive.connect(await freshOwner()).setCollectionMetadataURI(''), 'empty collection metadata update');
 assert.equal(await archive.contractURI(), 'ipfs://panic-archive/collection.json');
-const [initialRoyaltyReceiver, initialRoyaltyAmount] = await archive.royaltyInfo(1, 10_000);
-assert.equal(initialRoyaltyReceiver, signingWallet.address);
-assert.equal(initialRoyaltyAmount, 500n);
+assert.equal(await archive.paused(), true, 'a new production collection must begin paused');
+await expectRevert(() => archive.connect(recipient).unpause(), 'unauthorized initial unpause');
+await (await archive.connect(await freshOwner()).unpause()).wait();
+owner.reset();
+assert.equal(await archive.paused(), false);
 
 const freeURI = 'ipfs://panic-archive/free-mint.json';
 const freeVoucher = makeVoucher(1, freeURI, 'artwork-one');
@@ -130,7 +135,12 @@ await (await archive.connect(recipient).redeem(freeVoucher, freeURI, await sign(
 assert.equal(await archive.ownerOf(1), recipientAddress);
 assert.equal(await archive.tokenURI(1), freeURI);
 assert.equal(await archive.tokenIdByArtworkHash(freeVoucher.artworkHash), 1n);
+const [artistRoyaltyReceiver, artistRoyaltyAmount] = await archive.royaltyInfo(1, 10_000);
+assert.equal(artistRoyaltyReceiver, recipientAddress, 'the original minter must receive this token royalty');
+assert.equal(artistRoyaltyAmount, 500n);
 await expectRevert(() => archive.connect(recipient).redeem(freeVoucher, freeURI, sign(freeVoucher)), 'voucher replay');
+const nativePaymentVoucher = makeVoucher(20, 'ipfs://panic-archive/native-payment.json', 'native-payment-artwork');
+await expectRevert(() => archive.connect(recipient).redeem(nativePaymentVoucher, 'ipfs://panic-archive/native-payment.json', sign(nativePaymentVoucher), { value: 1n }), 'native SHIDO payment');
 
 const duplicateArt = makeVoucher(2, 'ipfs://panic-archive/duplicate.json', 'artwork-one');
 await expectRevert(() => archive.connect(recipient).redeem(duplicateArt, 'ipfs://panic-archive/duplicate.json', sign(duplicateArt)), 'duplicate artwork');
@@ -138,9 +148,13 @@ await expectRevert(() => archive.connect(recipient).redeem(duplicateArt, 'ipfs:/
 const paidURI = 'ipfs://panic-archive/paid-mint.json';
 const paidVoucher = makeVoucher(3, paidURI, 'artwork-two', { price: parseEther('.1') });
 const paidSignature = await sign(paidVoucher);
-await expectRevert(() => archive.connect(recipient).redeem(paidVoucher, paidURI, paidSignature, { value: parseEther('.09') }), 'wrong payment');
-await (await archive.connect(recipient).redeem(paidVoucher, paidURI, paidSignature, { value: parseEther('.1') })).wait();
+await (await paymentToken.mint(recipientAddress, parseEther('100'))).wait();
+await expectRevert(() => archive.connect(recipient).redeem(paidVoucher, paidURI, paidSignature), 'missing WSHIDO allowance');
+await (await paymentToken.connect(recipient).approve(contractAddress, MaxUint256)).wait();
+// Bypass JSON-RPC estimate caching after the intentional pre-approval revert.
+await (await archive.connect(recipient).redeem(paidVoucher, paidURI, paidSignature, { gasLimit: 500_000 })).wait();
 assert.equal(await archive.ownerOf(2), recipientAddress);
+assert.equal(await paymentToken.balanceOf(signingWallet.address), parseEther('.1'));
 
 const revoked = makeVoucher(4, 'ipfs://panic-archive/revoked.json', 'artwork-three');
 await (await archive.revokeVoucherNonce(4)).wait();
@@ -177,9 +191,9 @@ const latestTimestamp = BigInt((await provider.getBlock('latest')).timestamp);
 const expired = makeVoucher(10, 'ipfs://panic-archive/expired.json', 'artwork-nine', { deadline: latestTimestamp - 1n });
 await expectRevert(() => archive.connect(recipient).redeem(expired, 'ipfs://panic-archive/expired.json', sign(expired)), 'expired voucher');
 const overCap = makeVoucher(11, 'ipfs://panic-archive/over-cap.json', 'artwork-ten', { price: parseEther('2') });
-await expectRevert(() => archive.connect(recipient).redeem(overCap, 'ipfs://panic-archive/over-cap.json', sign(overCap), { value: parseEther('2') }), 'price above safety cap');
+await expectRevert(() => archive.connect(recipient).redeem(overCap, 'ipfs://panic-archive/over-cap.json', sign(overCap)), 'price above safety cap');
 const wrongRecipient = makeVoucher(12, 'ipfs://panic-archive/wrong-recipient.json', 'artwork-eleven');
-await expectRevert(() => archive.connect(ownerRpc).redeem(wrongRecipient, 'ipfs://panic-archive/wrong-recipient.json', sign(wrongRecipient)), 'wrong recipient');
+await expectRevert(async () => archive.connect(await freshOwner()).redeem(wrongRecipient, 'ipfs://panic-archive/wrong-recipient.json', sign(wrongRecipient)), 'wrong recipient');
 const emptyArtwork = makeVoucher(13, 'ipfs://panic-archive/empty-art.json', 'ignored', { artworkHash: `0x${'00'.repeat(32)}` });
 await expectRevert(() => archive.connect(recipient).redeem(emptyArtwork, 'ipfs://panic-archive/empty-art.json', sign(emptyArtwork)), 'empty artwork hash');
 const wrongDomainSignature = await signingWallet.signTypedData({ ...domain, chainId: network.chainId + 1n }, types, makeVoucher(14, 'ipfs://panic-archive/domain.json', 'artwork-twelve'));
@@ -231,7 +245,7 @@ for (let index = 0; index < fuzzCases; index += 1) {
   const localDigest = TypedDataEncoder.hash(domain, types, voucher);
   assert.equal(solidityDigest, localDigest, `property ${index}: Solidity and ethers EIP-712 digests must agree`);
 
-  const receipt = await (await archive.connect(recipient).redeem(voucher, uri, await sign(voucher), { value: price })).wait();
+  const receipt = await (await archive.connect(recipient).redeem(voucher, uri, await sign(voucher))).wait();
   const expectedTokenId = fuzzStartToken + BigInt(index + 1);
   const mintEvent = receipt.logs.map((log) => {
     try { return archive.interface.parseLog(log); } catch { return null; }
@@ -247,14 +261,18 @@ for (let index = 0; index < fuzzCases; index += 1) {
   assert.equal(await archive.ownerOf(expectedTokenId), recipientAddress);
   assert.equal(await archive.tokenURI(expectedTokenId), uri);
   assert.equal(await archive.tokenIdByArtworkHash(voucher.artworkHash), expectedTokenId);
+  const [propertyRoyaltyReceiver, propertyRoyaltyAmount] = await archive.royaltyInfo(expectedTokenId, 10_000);
+  assert.equal(propertyRoyaltyReceiver, recipientAddress);
+  assert.equal(propertyRoyaltyAmount, 500n);
   assert.equal(await archive.usedNonces(voucher.nonce), true);
-  await expectRevert(() => archive.connect(recipient).redeem(voucher, uri, sign(voucher), { value: price }), `property ${index}: replay`);
+  await expectRevert(() => archive.connect(recipient).redeem(voucher, uri, sign(voucher)), `property ${index}: replay`);
   fuzzPaidTotal += price;
 }
 assert.equal(await archive.totalMinted(), fuzzStartToken + BigInt(fuzzCases));
 
-const tinyArchive = await factory.deploy(signingWallet.address, signingWallet.address, signingWallet.address, 1, parseEther('1'), 'ipfs://panic-archive/tiny.json', signingWallet.address, 0);
+const tinyArchive = await factory.deploy(signingWallet.address, signingWallet.address, signingWallet.address, paymentTokenAddress, 1, parseEther('1'), 'ipfs://panic-archive/tiny.json', 0);
 await tinyArchive.waitForDeployment();
+await (await tinyArchive.unpause()).wait();
 const tinyAddress = await tinyArchive.getAddress();
 const tinyDomain = { ...domain, verifyingContract: tinyAddress };
 const crossContractURI = 'ipfs://panic-archive/cross-contract.json';
@@ -268,20 +286,10 @@ const tinyTwo = makeVoucher(1_002, tinyTwoURI, 'tiny-artwork-two');
 await expectRevert(() => tinyArchive.connect(recipient).redeem(tinyTwo, tinyTwoURI, signingWallet.signTypedData(tinyDomain, types, tinyTwo)), 'maximum supply');
 
 await (await archive.freezeCollectionMetadata()).wait();
-await expectRevert(() => archive.connect(ownerRpc).setCollectionMetadataURI('ipfs://changed.json'), 'frozen collection metadata');
-await (await archive.lockRoyalty()).wait();
-await expectRevert(() => archive.connect(ownerRpc).setRoyalty(signingWallet.address, 250), 'locked royalty');
-
-const contractBalance = async () => BigInt(await provider.send('eth_getBalance', [contractAddress, 'latest']));
-const expectedContractBalance = parseEther('.1') + fuzzPaidTotal;
-assert.equal(await contractBalance(), expectedContractBalance);
-const rejectorFactory = new ContractFactory(compiledRejector.abi, `0x${compiledRejector.evm.bytecode.object}`, owner);
-const rejector = await rejectorFactory.deploy(); await rejector.waitForDeployment();
-await (await archive.setPayoutReceiver(await rejector.getAddress())).wait();
-await expectRevert(() => archive.connect(ownerRpc).withdraw(), 'rejecting payout receiver');
-assert.equal(await contractBalance(), expectedContractBalance, 'failed payout must preserve the full contract balance');
-await (await archive.setPayoutReceiver(signingWallet.address)).wait();
-await (await archive.withdraw()).wait();
-assert.equal(await contractBalance(), 0n);
+await expectRevert(async () => archive.connect(await freshOwner()).setCollectionMetadataURI('ipfs://changed.json'), 'frozen collection metadata');
+const expectedPayoutBalance = parseEther('.1') + fuzzPaidTotal;
+assert.equal(await paymentToken.balanceOf(signingWallet.address), expectedPayoutBalance, 'WSHIDO must settle directly to the payout receiver');
+assert.equal(await paymentToken.balanceOf(contractAddress), 0n, 'archive must not retain player WSHIDO');
+assert.equal(BigInt(await provider.send('eth_getBalance', [contractAddress, 'latest'])), 0n, 'archive must not accept native SHIDO');
 assert.equal(await archive.totalMinted(), 4n + BigInt(fuzzCases));
 console.log(`Panic Archive local-chain tests passed at ${contractAddress}`);

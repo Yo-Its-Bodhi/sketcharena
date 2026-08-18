@@ -24,9 +24,11 @@ try {
 
   let broadcasts = 0;
   for (let index = 0; index < clientsRequested; index += 1) {
-    const socket = await connect(origin); socket.on('feed:item', () => { broadcasts += 1; }); clients.push(socket);
     const credential = createHash('sha256').update(`load-player-${index}`).digest('hex');
-    const resumed = await acknowledged(socket, 'session:resume', { credential, name: `Load ${index + 1}` });
+    const name = `Load ${index + 1}`;
+    const cookie = await migrate(origin, credential, name);
+    const socket = await connect(origin, cookie); socket.on('feed:item', () => { broadcasts += 1; }); clients.push(socket);
+    const resumed = await acknowledged(socket, 'session:resume', { name });
     if (!resumed.ok) throw new Error(`Player ${index + 1} could not resume: ${resumed.error}`);
   }
 
@@ -66,6 +68,13 @@ function round(value) { return Math.round(value * 10) / 10; }
 function percentile(values, quantile) { return values[Math.max(0, Math.ceil(values.length * quantile) - 1)] ?? 0; }
 function metric(text, name) { const match = text.match(new RegExp(`^${name} (\\d+(?:\\.\\d+)?)$`, 'm')); if (!match) throw new Error(`Metric ${name} missing`); return Number(match[1]); }
 function acknowledged(socket, event, payload) { return new Promise((resolve) => { const timer = setTimeout(() => resolve({ ok: false, error: `${event} timed out` }), 5_000); socket.emit(event, payload, (result) => { clearTimeout(timer); resolve(result); }); }); }
-function connect(origin) { return new Promise((resolve, reject) => { const socket = io(origin, { transports: ['websocket'], forceNew: true, reconnection: false }); socket.once('connect', () => resolve(socket)); socket.once('connect_error', reject); }); }
+async function migrate(origin, credential, name) {
+  const response = await fetch(`${origin}/api/account/migrate`, { method: 'POST', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: JSON.stringify({ name, deviceLabel: 'Load test client' }) });
+  if (!response.ok) throw new Error(`Could not establish ${name}: ${response.status} ${await response.text()}`);
+  const cookie = response.headers.get('set-cookie')?.split(';')[0];
+  if (!cookie) throw new Error(`Could not establish ${name}: session cookie missing`);
+  return cookie;
+}
+function connect(origin, cookie) { return new Promise((resolve, reject) => { const socket = io(origin, { transports: ['websocket'], forceNew: true, reconnection: false, extraHeaders: cookie ? { cookie } : undefined }); socket.once('connect', () => resolve(socket)); socket.once('connect_error', reject); }); }
 async function freePort() { const server = createServer(); await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); }); const port = server.address().port; await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); return port; }
 async function waitReady(origin, processHandle, logs) { for (let attempt = 0; attempt < 100; attempt += 1) { if (processHandle.exitCode !== null) throw new Error(`Load server exited early\n${logs.join('')}`); try { if ((await fetch(`${origin}/health/ready`)).ok) return; } catch { /* starting */ } await new Promise((resolve) => setTimeout(resolve, 50)); } throw new Error(`Load server did not become ready\n${logs.join('')}`); }

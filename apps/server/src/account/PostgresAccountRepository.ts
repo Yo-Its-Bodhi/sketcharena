@@ -1,5 +1,5 @@
 import { Pool, type PoolClient } from 'pg';
-import type { AccountChallenge, AccountRepository, PlayerAccount, PlayerDeviceSession, PlayerPasskey } from './AccountRepository.js';
+import { playerNameKey, type AccountChallenge, type AccountRepository, type PlayerAccount, type PlayerDeviceSession, type PlayerPasskey } from './AccountRepository.js';
 
 export class PostgresAccountRepository implements AccountRepository {
   constructor(private readonly pool: Pool) {}
@@ -8,13 +8,14 @@ export class PostgresAccountRepository implements AccountRepository {
     await pool.query('select 1'); return new PostgresAccountRepository(pool);
   }
   async findAccount(id: string): Promise<PlayerAccount | null> { const result = await this.pool.query('select * from player_accounts where id=$1', [id]); return result.rows[0] ? account(result.rows[0]) : null; }
+  async findByNameKey(nameKey: string): Promise<PlayerAccount | null> { const result = await this.pool.query('select * from player_accounts where name_key=$1', [nameKey]); return result.rows[0] ? account(result.rows[0]) : null; }
   async findByLegacyCredentialHash(hash: string): Promise<PlayerAccount | null> { const result = await this.pool.query('select * from player_accounts where legacy_credential_hash=$1', [hash]); return result.rows[0] ? account(result.rows[0]) : null; }
   async findByPasskeyId(id: string): Promise<{ account: PlayerAccount; passkey: PlayerPasskey } | null> {
     const result = await this.pool.query('select a.*, p.id passkey_id, p.account_id passkey_account_id, p.webauthn_user_id, p.public_key, p.counter, p.device_type, p.backed_up, p.transports, p.label passkey_label, p.created_at passkey_created_at, p.last_used_at from player_passkeys p join player_accounts a on a.id=p.account_id where p.id=$1', [id]);
     return result.rows[0] ? { account: account(result.rows[0]), passkey: passkeyFromJoined(result.rows[0]) } : null;
   }
-  async saveAccount(value: PlayerAccount): Promise<void> { await this.pool.query(`insert into player_accounts(id,name,legacy_credential_hash,secured_at,created_at,updated_at) values($1,$2,$3,$4,$5,$6)
-    on conflict(id) do update set name=excluded.name, legacy_credential_hash=coalesce(player_accounts.legacy_credential_hash,excluded.legacy_credential_hash), secured_at=coalesce(player_accounts.secured_at,excluded.secured_at), updated_at=excluded.updated_at`, [value.id, value.name, value.legacyCredentialHash ?? null, date(value.securedAt), date(value.createdAt), date(value.updatedAt)]); }
+  async saveAccount(value: PlayerAccount): Promise<void> { await this.pool.query(`insert into player_accounts(id,name,name_key,legacy_credential_hash,secured_at,created_at,updated_at) values($1,$2,$3,$4,$5,$6,$7)
+    on conflict(id) do update set name=player_accounts.name, name_key=player_accounts.name_key, legacy_credential_hash=coalesce(player_accounts.legacy_credential_hash,excluded.legacy_credential_hash), secured_at=coalesce(player_accounts.secured_at,excluded.secured_at), updated_at=excluded.updated_at`, [value.id, value.name, playerNameKey(value.name), value.legacyCredentialHash ?? null, date(value.securedAt), date(value.createdAt), date(value.updatedAt)]); }
   async saveSession(value: PlayerDeviceSession): Promise<void> { await this.pool.query(`insert into player_device_sessions(id,account_id,token_hash,label,created_at,last_seen_at,expires_at,revoked_at) values($1,$2,$3,$4,$5,$6,$7,$8)
     on conflict(id) do update set label=excluded.label,last_seen_at=excluded.last_seen_at,expires_at=excluded.expires_at,revoked_at=excluded.revoked_at`, [value.id, value.accountId, value.tokenHash, value.label, date(value.createdAt), date(value.lastSeenAt), date(value.expiresAt), date(value.revokedAt)]); }
   async findSessionByTokenHash(hash: string, now: number): Promise<{ account: PlayerAccount; session: PlayerDeviceSession } | null> {

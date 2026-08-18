@@ -19,5 +19,10 @@ suite('PostgresArtworkRepository integration', () => {
     await expect(repository.save({ ...input, id: first.id, ownerSessionId: randomUUID() })).rejects.toThrow(/owner mismatch/);
     await repository.updateMint(first.id, ownerSessionId, { network: 'shido', status: 'confirmed', walletAddress: '0x1111111111111111111111111111111111111111', contractAddress: '0x2222222222222222222222222222222222222222', tokenURI: 'ipfs://metadata', tokenId: '1', transactionHash: `0x${'a'.repeat(64)}` }, 'minted');
     expect((await repository.listMinted()).some((item) => item.id === first.id)).toBe(true);
+    expect((await repository.listMinted(100, '0x2222222222222222222222222222222222222222')).some((item) => item.id === first.id)).toBe(true);
+    expect((await repository.listMinted(100, '0x3333333333333333333333333333333333333333')).some((item) => item.id === first.id)).toBe(false);
+    expect(await repository.deleteOwned(first.id, randomUUID())).toBe(false);
+    expect(await repository.deleteOwned(first.id, ownerSessionId)).toBe(true);
+    expect(await repository.get(first.id)).toBeNull();
   });
 });

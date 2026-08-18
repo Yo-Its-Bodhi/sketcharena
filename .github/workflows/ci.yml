@@ -34,8 +34,8 @@ jobs:
       DATABASE_URL: postgresql://sketch:sketch-ci-only@127.0.0.1:5432/sketch_arena_test
       TEST_DATABASE_URL: postgresql://sketch:sketch-ci-only@127.0.0.1:5432/sketch_arena_test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
@@ -50,8 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm

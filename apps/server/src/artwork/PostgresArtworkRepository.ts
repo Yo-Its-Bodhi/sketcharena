@@ -32,9 +32,13 @@ export class PostgresArtworkRepository implements ArtworkRepository {
 
   async get(id: string): Promise<ArtworkDocument | null> { const result = await this.pool.query('select * from artworks where id=$1', [id]); return result.rows[0] ? fromRow(result.rows[0]) : null; }
   async listByOwner(ownerSessionId: string): Promise<ArtworkDocument[]> { const result = await this.pool.query('select * from artworks where owner_session_id=$1 order by updated_at desc', [ownerSessionId]); return result.rows.map(fromRow); }
-  async listMinted(limit = 100): Promise<ArtworkDocument[]> {
-    const result = await this.pool.query(`select * from artworks where status='minted' and mint->>'status'='confirmed' and coalesce(mint->>'tokenId','')<>'' and coalesce(mint->>'contractAddress','')<>'' and coalesce(mint->>'transactionHash','')<>'' and coalesce(mint->>'tokenURI','')<>'' order by updated_at desc limit $1`, [Math.max(1, Math.min(500, limit))]);
+  async listMinted(limit = 100, contractAddress?: string): Promise<ArtworkDocument[]> {
+    const result = await this.pool.query(`select * from artworks where status='minted' and mint->>'status'='confirmed' and coalesce(mint->>'tokenId','')<>'' and coalesce(mint->>'contractAddress','')<>'' and ($2::text is null or lower(mint->>'contractAddress')=lower($2)) and coalesce(mint->>'transactionHash','')<>'' and coalesce(mint->>'tokenURI','')<>'' order by updated_at desc limit $1`, [Math.max(1, Math.min(500, limit)), contractAddress ?? null]);
     return result.rows.map(fromRow);
+  }
+  async deleteOwned(id: string, ownerSessionId: string): Promise<boolean> {
+    const result = await this.pool.query('delete from artworks where id=$1 and owner_session_id=$2 returning id', [id, ownerSessionId]);
+    return Boolean(result.rows[0]);
   }
   async updateMint(id: string, ownerSessionId: string, mint: NonNullable<ArtworkDocument['mint']>, status: ArtworkStatus): Promise<ArtworkDocument> {
     const result = await this.pool.query('update artworks set mint=coalesce(mint,\'{}\'::jsonb) || $3::jsonb,status=$4,updated_at=$5 where id=$1 and owner_session_id=$2 returning *', [id, ownerSessionId, JSON.stringify(mint), status, new Date()]);
@@ -46,7 +50,7 @@ export class PostgresArtworkRepository implements ArtworkRepository {
 }
 
 function createDocument(input: SaveArtworkInput, now: number, previous?: ArtworkDocument): ArtworkDocument {
-  return { id: previous?.id ?? input.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin, status: input.status ?? previous?.status ?? 'draft', title: input.title.trim().slice(0, 80), description: (input.description ?? '').trim().slice(0, 500), canvasRatio: input.canvasRatio, width: input.width, height: input.height, strokes: input.strokes, previewUrl: previous?.previewUrl, sourceRoundId: input.sourceRoundId, createdAt: previous?.createdAt ?? now, updatedAt: now, mint: previous?.mint };
+  return { id: previous?.id ?? input.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin, status: input.status ?? previous?.status ?? 'draft', title: input.title.trim().slice(0, 80), description: (input.description ?? '').trim().slice(0, 500), canvasRatio: input.canvasRatio, width: input.width, height: input.height, strokes: input.strokes, previewUrl: input.previewUrl ?? previous?.previewUrl, sourceRoundId: input.sourceRoundId, createdAt: previous?.createdAt ?? now, updatedAt: now, mint: previous?.mint };
 }
 function values(document: ArtworkDocument): unknown[] { return [document.id, document.ownerSessionId, document.origin, document.status, document.title, document.description, document.canvasRatio, document.width, document.height, JSON.stringify(document.strokes), document.previewUrl ?? null, document.sourceRoundId ?? null, document.mint ? JSON.stringify(document.mint) : null, new Date(document.createdAt), new Date(document.updatedAt)]; }
 function time(value: unknown): number { return new Date(value as string | number | Date).getTime(); }

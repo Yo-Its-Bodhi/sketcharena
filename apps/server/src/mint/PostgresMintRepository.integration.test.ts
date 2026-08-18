@@ -20,7 +20,7 @@ suite('PostgresMintRepository integration', () => {
     expect((await repository.bindWallet(sessionId, address, 1_700)).address).toBe(address);
 
     const record = { id: randomUUID(), artworkId: randomUUID(), ownerSessionId: sessionId, status: 'prepared', walletAddress: address, contractAddress: address,
-      chainId: 1, chainName: 'Test', nativeCurrency: { name: 'TEST', symbol: 'TEST', decimals: 18 }, rpcUrls: [], mediaURI: 'ipfs://media', tokenURI: 'ipfs://metadata',
+      chainId: 1, chainName: 'Test', nativeCurrency: { name: 'TEST', symbol: 'TEST', decimals: 18 }, paymentToken: { address, name: 'Wrapped Test', symbol: 'WTEST', decimals: 18 }, rpcUrls: [], mediaURI: 'ipfs://media', tokenURI: 'ipfs://metadata',
       voucher: { recipient: address, tokenURIHash: `0x${'1'.repeat(64)}` as const, artworkHash: `0x${'2'.repeat(64)}` as const, price: '0', nonce: '1', deadline: '2', seasonId: 0, campaignId: `0x${'3'.repeat(64)}` as const },
       signature: `0x${'4'.repeat(130)}` as const, transactionRequest: { to: address, from: address, value: '0x0' as const, data: '0x00' as const }, usesMintCredit: true,
       creditRewardId: randomUUID(), creditUnit: 0, expiresAt: 2_000, createdAt: 1_000, updatedAt: 1_000 } satisfies MintRecord;

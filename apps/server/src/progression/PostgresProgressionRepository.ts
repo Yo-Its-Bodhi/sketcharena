@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
-import { consumeMintCreditInState, consumeMintDiscountInState, ensurePlayerInState, equipItemInState, grantInState, type AdminAuditEntry, type PlayerProgress, type ProgressionRepository, type RewardGrantInput } from './ProgressionRepository.js';
+import { buildLeaderboard, consumeMintCreditInState, consumeMintDiscountInState, ensurePlayerInState, equipItemInState, grantInState, recordMatchInState, type AdminAuditEntry, type LeaderboardPeriod, type LeaderboardResult, type MatchProgressInput, type PlayerProgress, type ProgressionRepository, type RewardGrantInput } from './ProgressionRepository.js';
 
-interface ProgressionState { players: PlayerProgress[]; audit: AdminAuditEntry[]; appliedKeys: string[]; redemptionKeys: string[]; }
+interface ProgressionState { players: PlayerProgress[]; audit: AdminAuditEntry[]; appliedKeys: string[]; redemptionKeys: string[]; matchKeys: string[]; }
 
 export class PostgresProgressionRepository implements ProgressionRepository {
   constructor(private readonly pool: Pool, private readonly clock: () => number = Date.now) {}
@@ -17,7 +17,7 @@ export class PostgresProgressionRepository implements ProgressionRepository {
     const applied = await client.query('insert into progression_applied_keys(idempotency_key) values($1) on conflict do nothing returning idempotency_key', [input.idempotencyKey]);
     if (!applied.rowCount) return { granted: 0, skipped: input.sessionIds.length };
     const ids = [...new Set(input.sessionIds)].sort(); const rows = await client.query('select document from player_progression where session_id=any($1::text[]) order by session_id for update', [ids]);
-    const state: ProgressionState = { players: rows.rows.map(player), audit: [], appliedKeys: [], redemptionKeys: [] }; const result = grantInState(state, input, this.clock());
+    const state: ProgressionState = { players: rows.rows.map(player), audit: [], appliedKeys: [], redemptionKeys: [], matchKeys: [] }; const result = grantInState(state, input, this.clock());
     for (const value of state.players) await savePlayer(client, value);
     if (state.audit[0]) await saveAudit(client, state.audit[0]);
     return result;
@@ -28,6 +28,15 @@ export class PostgresProgressionRepository implements ProgressionRepository {
   consumeMintCredit(sessionId: string, rewardId: string, idempotencyKey: string, amount = 1): Promise<PlayerProgress> { return this.consume(sessionId, idempotencyKey, (state) => consumeMintCreditInState(state, sessionId, rewardId, idempotencyKey, amount, this.clock())); }
   consumeMintDiscount(sessionId: string, rewardId: string, idempotencyKey: string, amount = 1): Promise<PlayerProgress> { return this.consume(sessionId, idempotencyKey, (state) => consumeMintDiscountInState(state, sessionId, rewardId, idempotencyKey, amount, this.clock())); }
   equipItem(sessionId: string, itemId: string): Promise<PlayerProgress> { return transaction(this.pool, async (client) => { const value = await lockedPlayer(client, sessionId); const state = stateWith(value); const updated = equipItemInState(state, sessionId, itemId); await savePlayer(client, updated); return structuredClone(updated); }); }
+  recordMatch(input: MatchProgressInput): Promise<{ recorded: boolean }> { return transaction(this.pool, async (client) => {
+    const receipt = await client.query('insert into leaderboard_match_receipts(match_id, ended_at) values($1,$2) on conflict do nothing returning match_id', [input.matchId, new Date(input.endedAt)]);
+    if (!receipt.rowCount) return { recorded: false };
+    const ids = [...new Set(input.players.map((value) => value.sessionId))].sort();
+    const rows = await client.query('select document from player_progression where session_id=any($1::text[]) order by session_id for update', [ids]);
+    const state: ProgressionState = { players: rows.rows.map(player), audit: [], appliedKeys: [], redemptionKeys: [], matchKeys: [] };
+    const result = recordMatchInState(state, input); for (const value of state.players) await savePlayer(client, value); return result;
+  }); }
+  async leaderboard(period: LeaderboardPeriod, now = this.clock(), limit = 100): Promise<LeaderboardResult> { const result = await this.pool.query('select document from player_progression'); return buildLeaderboard(result.rows.map(player), period, now, limit); }
   async audit(limit = 100): Promise<AdminAuditEntry[]> { const result = await this.pool.query('select document from progression_audit order by at desc limit $1', [Math.max(1, Math.min(500, limit))]); return result.rows.map((row) => structuredClone(row.document as AdminAuditEntry)); }
 
   private consume(sessionId: string, idempotencyKey: string, operation: (state: ProgressionState) => PlayerProgress): Promise<PlayerProgress> { return transaction(this.pool, async (client) => {
@@ -37,7 +46,7 @@ export class PostgresProgressionRepository implements ProgressionRepository {
   }); }
 }
 
-function stateWith(value?: PlayerProgress): ProgressionState { return { players: value ? [value] : [], audit: [], appliedKeys: [], redemptionKeys: [] }; }
+function stateWith(value?: PlayerProgress): ProgressionState { return { players: value ? [value] : [], audit: [], appliedKeys: [], redemptionKeys: [], matchKeys: [] }; }
 async function lockedPlayer(client: PoolClient, sessionId: string): Promise<PlayerProgress> { const result = await client.query('select document from player_progression where session_id=$1 for update', [sessionId]); if (!result.rows[0]) throw new Error('Player not found'); return player(result.rows[0]); }
 async function savePlayer(client: PoolClient, value: PlayerProgress): Promise<void> { await client.query(`insert into player_progression(session_id,name,season_id,level,battle_pass,document,first_seen_at,last_seen_at) values($1,$2,$3,$4,$5,$6::jsonb,$7,$8)
   on conflict(session_id) do update set name=excluded.name,season_id=excluded.season_id,level=excluded.level,battle_pass=excluded.battle_pass,document=excluded.document,last_seen_at=excluded.last_seen_at`, [value.sessionId, value.name, value.seasonId, value.level, value.battlePass, JSON.stringify(value), new Date(value.firstSeenAt), new Date(value.lastSeenAt)]); }

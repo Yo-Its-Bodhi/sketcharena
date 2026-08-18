@@ -1,6 +1,6 @@
 # NFTStudio integration record
 
-Checked against the public service at `https://nftstudio.bodhix.io` and the supplied NFTStudio V5 Solidity contracts on 2026-08-15.
+Checked against the public service at `https://nftstudio.bodhix.io`, the supplied NFTStudio V5 Solidity contracts and live Shido state on 2026-08-18.
 
 ## Verified public behavior
 
@@ -27,13 +27,20 @@ Checked against the public service at `https://nftstudio.bodhix.io` and the supp
 
 The first contract implementation draft now lives at `contracts/SketchArenaPanicArchive.sol`. It compiles locally with Solidity 0.8.26 and OpenZeppelin 4.9.6, with optimized deployed bytecode below the EIP-170 size ceiling. This is implementation evidence, not an audit or deployment approval; the required adversarial test matrix is tracked in `PANIC_ARCHIVE_CONTRACT.md`.
 
-## Still not present or publicly verified
+## Live Panic Archive integration
 
-- authenticated deploy/upload API contract;
-- deployed and independently reviewed Panic Archive contract address;
-- production voucher signer and final native-token fee configuration;
-- indexer callback or deterministic marketplace token URL contract;
-- storage limits, fees, royalties, or retry semantics.
+- Panic Archive collection: `0x80E81dE12b1412B74475C9354d092091Da4Ea334`.
+- NFTStudio Marketplace V2: `0x19ee7a8D5Ee19c38d1754290b483BE6f4483e9d6`.
+- The marketplace reports the collection approved on-chain.
+- NFTStudio's public indexer exposes **The Panic Archive** at `onchain-80e81de12b1412b74475c9354d092091da4ea334` and exposes confirmed token #1.
+- The first paid canary receipt and original-artist royalty are independently verified in `PANIC_ARCHIVE_MAINNET_EVIDENCE.md`.
+
+## Still not independently assured
+
+- independent review of the deployed Panic Archive Solidity;
+- documented NFTStudio indexer refresh/retry service levels;
+- end-to-end marketplace purchase, cancellation and settlement evidence for this collection;
+- NFTStudio storage retention, backup and disaster-recovery policy.
 
 ## Implemented behind the production gate
 
@@ -54,6 +61,4 @@ The first contract implementation draft now lives at `contracts/SketchArenaPanic
 
 ## Safe shipping boundary
 
-iSketch keeps canonical artwork in its authenticated Vault and exposes the direct Panic Archive experience only when the dedicated server configuration is complete. Until the contract is independently reviewed, deployed once, approved by the marketplace and supplied through production secrets, the interface remains visibly locked and sends no transaction.
-
-This avoids fabricating a mint, claiming marketplace visibility before indexing, or asking iSketch to hold wallet secrets.
+Sketch Arena keeps canonical editable artwork in its authenticated Vault. The live deployment now exposes minting only through complete server configuration, receipt verification and the approved/indexed collection. It does not fabricate a mint, claim success before confirmation, or hold player wallet keys. Independent contract review remains an explicit residual risk rather than being misrepresented as complete.

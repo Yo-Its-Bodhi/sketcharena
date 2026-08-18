@@ -22,3 +22,18 @@ test('loads ordered checksum-stable migrations and rejects embedded transactions
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('uses one canonical checksum across Unix and Windows line endings', async () => {
+  const unixDirectory = await mkdtemp(join(tmpdir(), 'sketch-arena-migrations-unix-'));
+  const windowsDirectory = await mkdtemp(join(tmpdir(), 'sketch-arena-migrations-windows-'));
+  try {
+    await writeFile(join(unixDirectory, '001_first.sql'), 'create table first(\n  id int\n);\n');
+    await writeFile(join(windowsDirectory, '001_first.sql'), 'create table first(\r\n  id int\r\n);\r\n');
+    const [unix] = await loadMigrations(unixDirectory); const [windows] = await loadMigrations(windowsDirectory);
+    assert.equal(unix.checksum, windows.checksum);
+    assert.deepEqual(unix.compatibleChecksums, windows.compatibleChecksums);
+    assert.equal(unix.compatibleChecksums.length, 2);
+  } finally {
+    await Promise.all([rm(unixDirectory, { recursive: true, force: true }), rm(windowsDirectory, { recursive: true, force: true })]);
+  }
+});

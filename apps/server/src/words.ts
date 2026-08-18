@@ -12,6 +12,33 @@ export const WORDS: Record<string, string[]> = {
     'diamond hands', 'gas fee', 'bear market', 'moon bag', 'rug pull', 'hardware wallet',
     'validator', 'block explorer', 'liquidity pool', 'crypto whale', 'seed phrase', 'airdrop',
   ],
+  animals: [
+    'sleepy sloth', 'disco penguin', 'cat in a spacesuit', 'giraffe on roller skates',
+    'detective duck', 'shark with braces', 'llama at a wedding', 'octopus conductor',
+    'cowboy hamster', 'frog on a motorcycle', 'bear making pancakes', 'pigeon bodybuilder',
+  ],
+  food: [
+    'pizza', 'birthday cake', 'taco', 'spaghetti', 'ice cream truck', 'sushi chef',
+    'angry avocado', 'donut detective', 'hot dog at the beach', 'haunted refrigerator',
+    'pancake tower', 'banana on the phone',
+  ],
+  screen: [
+    'Jurassic Park', 'The Matrix', 'Titanic', 'Ghostbusters', 'Finding Nemo', 'Batman',
+    'Stranger Things', 'The Lion King', 'Back to the Future', 'Home Alone', 'Shrek', 'Jaws',
+  ],
+  music: [
+    'Taylor Swift', 'The Beatles', 'Beyonce', 'Queen', 'Daft Punk', 'Nirvana',
+    'Elvis Presley', 'Lady Gaga', 'Snoop Dogg', 'Spice Girls', 'KISS', 'The Weeknd',
+  ],
+  places: [
+    'Eiffel Tower', 'Grand Canyon', 'Great Wall of China', 'Niagara Falls', 'Mount Everest', 'Stonehenge',
+    'Sydney Opera House', 'Las Vegas', 'the Moon', 'Hollywood sign', 'Taj Mahal', 'desert island',
+  ],
+  legends: [
+    'Medusa at the salon', 'dragon with hiccups', 'vampire dentist', 'mermaid in traffic',
+    'Bigfoot taking a selfie', 'unicorn mechanic', 'zombie yoga class', 'centaur skateboarder',
+    'cyclops optometrist', 'werewolf at the groomer', 'phoenix in a rainstorm', 'Kraken tea party',
+  ],
 };
 
 export function randomWord(category: string, random = Math.random): string {

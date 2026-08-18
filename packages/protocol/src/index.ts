@@ -3,6 +3,7 @@ export type CanvasRatio = 'square' | 'portrait' | 'landscape';
 export type DrawTool = 'pencil' | 'eraser' | 'fill';
 export type BrushStyle = 'pencil' | 'ink' | 'marker' | 'airbrush' | 'charcoal' | 'technical' | 'watercolor' | 'pastel' | 'pixel' | 'calligraphy' | 'neon';
 export type StrokeShape = 'freehand' | 'line' | 'rectangle' | 'ellipse' | 'arrow' | 'triangle';
+export type ArtworkBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten';
 
 export interface Point { x: number; y: number; pressure?: number; }
 
@@ -17,7 +18,11 @@ export interface Stroke {
   shape?: StrokeShape;
   opacity?: number;
   smoothing?: number;
+  layerId?: string;
+  blendMode?: ArtworkBlendMode;
 }
+
+export { renderArtworkDocumentSvg, renderArtworkSvg } from './renderArtworkSvg.js';
 
 export interface PlayerView {
   id: string;
@@ -25,6 +30,8 @@ export interface PlayerView {
   name: string;
   avatarSeed: number;
   avatarItem?: string;
+  titleItem?: string;
+  frameItem?: string;
   score: number;
   roundScore: number;
   streak: number;
@@ -83,6 +90,7 @@ export interface RoundResult {
 }
 
 export interface MatchResult {
+  matchId: string;
   roomId: string;
   rounds: RoundResult[];
   standings: PlayerView[];
@@ -116,14 +124,22 @@ export interface PlayerProgress {
   xp: number;
   level: number;
   battlePass: 'free' | 'premium';
+  passEntitlements: string[];
   achievements: string[];
   items: string[];
-  equipped: { avatar?: string; brush?: string };
+  equipped: { avatar?: string; brush?: string; reaction?: string; title?: string; frame?: string };
+  competitive: CompetitiveProfile;
   rewards: RewardEntitlement[];
   firstSeenAt: number;
   lastSeenAt: number;
 }
-export interface SeasonItemDefinition { id: string; name: string; description: string; slot: 'avatar' | 'brush'; rarity: 'common' | 'rare' | 'epic' | 'legendary'; previewColor: string; }
+export type CosmeticSlot = 'avatar' | 'brush' | 'reaction' | 'title' | 'frame';
+export interface SeasonItemDefinition { id: string; name: string; description: string; slot: CosmeticSlot; rarity: 'common' | 'rare' | 'epic' | 'legendary'; previewColor: string; glyph?: string; }
+export interface CompetitiveTotals { chaosScore: number; matches: number; wins: number; sharedWins: number; correctGuesses: number; fastestGuesses: number; drawings: number; gamePoints: number; }
+export interface CompetitiveProfile { allTime: CompetitiveTotals; season: CompetitiveTotals; weeks: Record<string, CompetitiveTotals>; months: Record<string, CompetitiveTotals>; }
+export type LeaderboardPeriod = 'weekly' | 'monthly' | 'season' | 'all-time';
+export interface LeaderboardEntry extends CompetitiveTotals { rank: number; sessionId: string; name: string; level: number; avatarItem?: string; titleItem?: string; frameItem?: string; }
+export interface LeaderboardResponse { period: LeaderboardPeriod; periodKey: string; label: string; startsAt?: number; endsAt?: number; scoring: string[]; prizes: Array<{ rank: string; label: string; detail: string }>; entries: LeaderboardEntry[]; }
 
 export type ModerationReportCategory = 'harassment' | 'hate-or-threats' | 'spam' | 'cheating' | 'unsafe-art' | 'other';
 export type ModerationReportStatus = 'open' | 'reviewing' | 'resolved' | 'dismissed';
@@ -169,6 +185,8 @@ export interface MintPreparation {
   chainId: number;
   chainName: string;
   nativeCurrency: { name: string; symbol: string; decimals: number };
+  paymentToken: { address: `0x${string}`; name: string; symbol: string; decimals: number };
+  priceQuote?: { usdCents: number; tokenUsd: number; source: string; quotedAt: number };
   rpcUrls: string[];
   blockExplorerUrl?: string;
   marketplaceUrl?: string;
@@ -177,6 +195,7 @@ export interface MintPreparation {
   voucher: PanicArchiveVoucher;
   signature: `0x${string}`;
   transactionRequest: { to: `0x${string}`; from: `0x${string}`; value: `0x${string}`; data: `0x${string}` };
+  approvalRequest?: { to: `0x${string}`; from: `0x${string}`; value: `0x0`; data: `0x${string}` };
   usesMintCredit: boolean;
   discountBps?: number;
   expiresAt: number;
@@ -228,6 +247,7 @@ export interface PanicArchiveItem {
   width: number;
   height: number;
   strokes: Stroke[];
+  previewUrl?: string;
   createdAt: number;
   mintedAt: number;
   seasonId: number;
@@ -260,7 +280,7 @@ export const DRAW_LIMITS = {
 } as const;
 
 export interface ClientToServerEvents {
-  'session:resume': (payload: { credential?: string; name: string }, ack: (value: Ack<{ sessionId: string }>) => void) => void;
+  'session:resume': (payload: { credential?: string; name: string }, ack: (value: Ack<{ sessionId: string; name: string }>) => void) => void;
   'rooms:subscribe': () => void;
   'room:create': (payload: { name: string; category: string; isPrivate?: boolean; maxPlayers?: number; roundSeconds?: number }, ack: (value: Ack<{ room: RoomView; inviteCode?: string }>) => void) => void;
   'room:join': (payload: { roomId?: string; inviteCode?: string }, ack: (value: Ack<{ room: RoomView }>) => void) => void;
