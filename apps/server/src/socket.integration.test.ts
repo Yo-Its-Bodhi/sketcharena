@@ -184,9 +184,10 @@ describe('Socket.IO authoritative transport lifecycle', () => {
     const round = await revealed;
     const reactions = await Promise.all(Array.from({ length: 40 }, () => new Promise<{ ok: boolean; error?: string }>((resolve) => drawer.socket.emit('reaction:send', { emoji: '😂' }, resolve))));
     expect(reactions.some((ack) => !ack.ok && ack.error === 'Slow down for a moment')).toBe(true);
-    const kept = await new Promise<{ ok: boolean; data?: ArtworkDocument; error?: string }>((resolve) => drawer.socket.emit('round:keep', { roundId: round.roundId }, resolve));
-    expect(kept).toMatchObject({ ok: true, data: { origin: 'arena', status: 'gallery', sourceRoundId: round.roundId } });
+    const keepResponse = await fetch(`${origin}/api/artworks`, { method: 'POST', headers: { cookie: drawer.cookie, 'content-type': 'application/json' }, body: JSON.stringify({ origin: 'arena', status: 'gallery', title: round.prompt, canvasRatio: 'square', width: 1200, height: 1200, strokes: round.strokes, sourceRoundId: round.roundId }) });
+    expect(keepResponse.status).toBe(201); const kept = await keepResponse.json() as ArtworkDocument;
+    expect(kept).toMatchObject({ origin: 'arena', status: 'gallery', sourceRoundId: round.roundId });
     const vaultResponse = await fetch(`${origin}/api/artworks`, { headers: { cookie: drawer.cookie } }); expect(vaultResponse.status).toBe(200);
-    expect(await vaultResponse.json()).toEqual(expect.arrayContaining([expect.objectContaining({ id: kept.data!.id, sourceRoundId: round.roundId })]));
+    expect(await vaultResponse.json()).toEqual(expect.arrayContaining([expect.objectContaining({ id: kept.id, sourceRoundId: round.roundId })]));
   }, 15_000);
 });
