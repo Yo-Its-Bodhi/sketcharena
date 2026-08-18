@@ -23,7 +23,7 @@ Four issues were found and remediated during this pass:
 - Studio reported a healthy server as offline after validation failure, and a pending autosave could overwrite successful Vault feedback. Failures are now honest and explicit; successful Vault feedback is protected long enough to be visible.
 - The mobile Backstage lock overflowed horizontally and the live-match helper expired before a legitimate cap-length game. The lock now fits 390px viewports and the helper has a bounded six-minute default.
 
-The application, live Panic Archive mint boundary and NFTStudio handoff are operating as a fail-closed beta. Paid Battle Pass checkout, independent contract/security review, physical-device coverage and production recovery drills remain external release gates and must not be represented as complete.
+The application, live Panic Archive mint boundary and NFTStudio handoff are operating as a fail-closed beta. Paid Battle Pass checkout, independent contract/security review, physical-device coverage, off-host retention and point-in-time recovery remain external release gates and must not be represented as complete. The same-host production backup restore drill is complete.
 
 ## Panic Archive storefront
 
@@ -45,7 +45,7 @@ The Panic Archive integration is live behind a fail-closed configuration gate: f
 
 Manual browser QA completed on 2026-08-16 against the running local client/server. It covered the entry and lobby, a genuine two-player/two-round match, correct guesses, match completion, afterparty gallery enlargement, SVG download controls, owned-trophy save-to-Vault, confirmed Vault appearance, keyboard-visible dialog focus, Escape dismissal, phone-width Archive and Studio layouts, and a clean browser console. The responsive Studio now exposes format presets, the full brush/color panel and non-destructive layers through a four-way mobile dock rather than hiding professional controls.
 
-The production operations pass now adds separate liveness/readiness probes, an immediately observable draining state, idempotent shutdown coordination, fatal-process handling, correlated one-line JSON request/lifecycle logs, and a tested same-host proxy trust boundary so Nginx users do not share one rate-limit identity. Example hardened Nginx and systemd configurations are included under `deploy/`.
+The production operations pass now adds separate liveness/readiness probes, an immediately observable draining state, idempotent shutdown coordination, fatal-process handling, correlated one-line JSON request/lifecycle logs, and a tested same-host proxy trust boundary so Nginx users do not share one rate-limit identity. Production-matching hardened Nginx and systemd configurations are included under `deploy/`. The live Sketch-only proxy now enforces HSTS, CSP, clickjacking, MIME-sniffing, referrer, permissions and cross-origin policies, denies public metrics access, and preserved healthy assets, probes and WebSocket transport after validation and reload.
 
 The 2026-08-18 recovery drill went beyond checksum inspection: the latest verified production dump restored all 10 migrations plus accounts, Vault artwork, mint records, progression, promotions, moderation and leaderboard tables into a uniquely named temporary database. Representative aggregate counts passed and the database was removed. The application role remained least-privilege and could not create databases; PostgreSQL administration created only the isolated target and transferred ownership for the drill.
 
