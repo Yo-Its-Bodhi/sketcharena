@@ -106,6 +106,8 @@ export const SEASON_ITEMS = [
   { id: 'velvet-rope-frame', name: 'Velvet Rope', description: 'A premium coral-and-gold frame for extremely important nonsense.', slot: 'frame', rarity: 'legendary', previewColor: '#ef476f' },
   { id: 'professional-disaster-title', name: 'Professional Disaster', description: 'A premium title for players who fail with exceptional consistency.', slot: 'title', rarity: 'legendary', previewColor: '#ffb703' },
 ] as const;
+const SEASON_0_PUBLIC_ITEM_IDS = new Set<string>(['yellow-weirdo-avatar', 'panic-pencil', 'screaming-pencil-reaction', 'beautiful-disaster-title', 'taped-masterpiece-frame']);
+export const ACTIVE_SEASON_ITEMS = SEASON_ITEMS.filter((item) => SEASON_0_PUBLIC_ITEM_IDS.has(item.id));
 
 export interface ProgressionRepository {
   ensurePlayer(sessionId: string, name: string): Promise<PlayerProgress>;

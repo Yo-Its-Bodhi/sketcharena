@@ -9,7 +9,7 @@ import { z } from 'zod';
 import type { ClientToServerEvents, MatchResult, ServerToClientEvents, Stroke } from '@sketch-arena/protocol';
 import { FileArtworkRepository, MemoryArtworkRepository, toPanicArchiveItem } from './artwork/ArtworkRepository.js';
 import { GAME, GameRoom } from './game/GameRoom.js';
-import { FileProgressionRepository, MemoryProgressionRepository, SEASON_ITEMS, type PlayerProgress } from './progression/ProgressionRepository.js';
+import { ACTIVE_SEASON_ITEMS, FileProgressionRepository, MemoryProgressionRepository, type PlayerProgress } from './progression/ProgressionRepository.js';
 import { FileMintRepository, MemoryMintRepository } from './mint/MintRepository.js';
 import { MintService, MintServiceError, loadMintConfiguration } from './mint/MintService.js';
 import { SlidingLimit } from './rateLimit.js';
@@ -288,7 +288,7 @@ app.get('/api/progression', async (request, response) => {
   const player = await progression.getPlayer(ownerSessionId);
   return player ? response.json(publicProgression(player)) : response.status(404).json({ error: 'Player profile not found' });
 });
-app.get('/api/season/items', (_request, response) => response.json(SEASON_ITEMS));
+app.get('/api/season/items', (_request, response) => response.json(ACTIVE_SEASON_ITEMS));
 app.get('/api/leaderboards', async (request, response) => {
   const period = leaderboardPeriodSchema.catch('weekly').parse(request.query.period);
   return response.json(await progression.leaderboard(period, Date.now(), 100));
@@ -356,7 +356,7 @@ app.get('/api/admin/overview', async (request, response) => {
 });
 app.get('/api/admin/players', async (request, response) => {
   if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
-  const search = z.string().max(80).catch('').parse(request.query.search); return response.json(await progression.listPlayers(search));
+  const search = z.string().max(80).catch('').parse(request.query.search); return response.json((await progression.listPlayers(search)).map(publicProgression));
 });
 app.get('/api/admin/leaderboard-prizes/preview', async (request, response) => {
   if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
@@ -640,7 +640,9 @@ function clearPlayerCookie(response: express.Response): void { response.clearCoo
 function publicAccount(account: { id: string; name: string; securedAt?: number; createdAt: number }, sessionId: string) { return { id: account.id, name: account.name, secured: Boolean(account.securedAt), securedAt: account.securedAt, createdAt: account.createdAt, sessionId }; }
 function publicProgression(player: PlayerProgress): PlayerProgress {
   const secretCampaign = 'season-0-founding-weirdos-season-1-premium';
-  return { ...player, passEntitlements: player.passEntitlements.filter((value) => value !== 'season-1-premium'), rewards: player.rewards.filter((reward) => reward.campaignId !== secretCampaign) };
+  const visibleItemIds = new Set<string>(ACTIVE_SEASON_ITEMS.map((item) => item.id));
+  const equipped = Object.fromEntries(Object.entries(player.equipped).filter(([, itemId]) => itemId && visibleItemIds.has(itemId))) as PlayerProgress['equipped'];
+  return { ...player, battlePass: 'free', passEntitlements: player.passEntitlements.filter((value) => value !== 'season-1-premium' && value !== 'season-0-premium'), items: player.items.filter((itemId) => visibleItemIds.has(itemId)), equipped, rewards: player.rewards.filter((reward) => reward.campaignId !== secretCampaign && reward.kind !== 'battle-pass' && !reward.campaignId?.startsWith('season-0-premium-')) };
 }
 function authorizeAdmin(authorization: string | undefined, ip: string | undefined, required: BackstageRole) {
   if (!adminLimit.take(ip ?? 'unknown')) return null;
