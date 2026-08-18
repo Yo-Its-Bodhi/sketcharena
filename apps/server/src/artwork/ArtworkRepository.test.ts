@@ -59,4 +59,16 @@ describe('ArtworkRepository', () => {
     expect(publicItem).not.toHaveProperty('mint.walletAddress');
     expect(publicItem).toMatchObject({ tokenId: '7', seasonId: 0, seasonName: 'The First Mess' });
   });
+
+  it('can scope the public Archive to the active collection contract', async () => {
+    const repository = new MemoryArtworkRepository();
+    const ownerSessionId = '11111111-1111-4111-8111-111111111111';
+    const retired = await repository.save({ ownerSessionId, origin: 'studio', status: 'gallery', title: 'Retired test mint', canvasRatio: 'square', width: 1200, height: 1200, strokes: [] });
+    const active = await repository.save({ ownerSessionId, origin: 'studio', status: 'gallery', title: 'Active collection mint', canvasRatio: 'square', width: 1200, height: 1200, strokes: [] });
+    await repository.updateMint(retired.id, ownerSessionId, { network: 'shido', status: 'confirmed', walletAddress: '0x1111111111111111111111111111111111111111', contractAddress: '0x2222222222222222222222222222222222222222', tokenURI: 'ipfs://retired', tokenId: '1', transactionHash: `0x${'a'.repeat(64)}` }, 'minted');
+    await repository.updateMint(active.id, ownerSessionId, { network: 'shido', status: 'confirmed', walletAddress: '0x1111111111111111111111111111111111111111', contractAddress: '0x3333333333333333333333333333333333333333', tokenURI: 'ipfs://active', tokenId: '1', transactionHash: `0x${'b'.repeat(64)}` }, 'minted');
+
+    expect((await repository.listMinted(100, '0x3333333333333333333333333333333333333333')).map((item) => item.id)).toEqual([active.id]);
+    expect((await repository.listMinted(100, '0x3333333333333333333333333333333333333333')).some((item) => item.id === retired.id)).toBe(false);
+  });
 });

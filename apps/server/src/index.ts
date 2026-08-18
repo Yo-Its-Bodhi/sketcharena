@@ -254,7 +254,7 @@ const contractAccessSchema = z.discriminatedUnion('action', [
 app.get('/api/rooms', (_request, response) => response.json(publicRooms()));
 app.get('/api/archive', async (request, response) => {
   const limit = z.coerce.number().int().min(1).max(100).catch(48).parse(request.query.limit);
-  const records = await artwork.listMinted(limit);
+  const records = minting.config.contractAddress ? await artwork.listMinted(limit, minting.config.contractAddress) : [];
   const items = records.map(toPanicArchiveItem);
   return response.json({ collection: 'Sketch Arena: The Panic Archive', season: { id: 0, name: 'The First Mess' }, total: items.length, items });
 });

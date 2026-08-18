@@ -32,8 +32,8 @@ export class PostgresArtworkRepository implements ArtworkRepository {
 
   async get(id: string): Promise<ArtworkDocument | null> { const result = await this.pool.query('select * from artworks where id=$1', [id]); return result.rows[0] ? fromRow(result.rows[0]) : null; }
   async listByOwner(ownerSessionId: string): Promise<ArtworkDocument[]> { const result = await this.pool.query('select * from artworks where owner_session_id=$1 order by updated_at desc', [ownerSessionId]); return result.rows.map(fromRow); }
-  async listMinted(limit = 100): Promise<ArtworkDocument[]> {
-    const result = await this.pool.query(`select * from artworks where status='minted' and mint->>'status'='confirmed' and coalesce(mint->>'tokenId','')<>'' and coalesce(mint->>'contractAddress','')<>'' and coalesce(mint->>'transactionHash','')<>'' and coalesce(mint->>'tokenURI','')<>'' order by updated_at desc limit $1`, [Math.max(1, Math.min(500, limit))]);
+  async listMinted(limit = 100, contractAddress?: string): Promise<ArtworkDocument[]> {
+    const result = await this.pool.query(`select * from artworks where status='minted' and mint->>'status'='confirmed' and coalesce(mint->>'tokenId','')<>'' and coalesce(mint->>'contractAddress','')<>'' and ($2::text is null or lower(mint->>'contractAddress')=lower($2)) and coalesce(mint->>'transactionHash','')<>'' and coalesce(mint->>'tokenURI','')<>'' order by updated_at desc limit $1`, [Math.max(1, Math.min(500, limit)), contractAddress ?? null]);
     return result.rows.map(fromRow);
   }
   async updateMint(id: string, ownerSessionId: string, mint: NonNullable<ArtworkDocument['mint']>, status: ArtworkStatus): Promise<ArtworkDocument> {
