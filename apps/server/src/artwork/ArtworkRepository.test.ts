@@ -2,6 +2,28 @@ import { describe, expect, it } from 'vitest';
 import { MemoryArtworkRepository, toPanicArchiveItem } from './ArtworkRepository.js';
 
 describe('ArtworkRepository', () => {
+  it('uses a Studio draft ID as an idempotent Vault receipt', async () => {
+    const repository = new MemoryArtworkRepository();
+    const input = {
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      ownerSessionId: '11111111-1111-4111-8111-111111111111',
+      origin: 'studio' as const,
+      status: 'mint-ready' as const,
+      title: 'Tablet masterpiece',
+      canvasRatio: 'square' as const,
+      width: 2400,
+      height: 2400,
+      strokes: [],
+    };
+
+    const first = await repository.save(input);
+    const retry = await repository.save({ ...input, title: 'Tablet masterpiece recovered' });
+
+    expect(retry.id).toBe(first.id);
+    expect(retry.title).toBe('Tablet masterpiece recovered');
+    expect(await repository.listByOwner(input.ownerSessionId)).toHaveLength(1);
+  });
+
   it('treats a repeated arena round save as the same artwork', async () => {
     const repository = new MemoryArtworkRepository();
     const input = {

@@ -44,7 +44,7 @@ export class MemoryArtworkRepository implements ArtworkRepository {
     const previous = input.id ? this.records.get(input.id) : undefined;
     if (previous && previous.ownerSessionId !== input.ownerSessionId) throw new Error('Artwork owner mismatch');
     const document: ArtworkDocument = {
-      id: previous?.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin,
+      id: previous?.id ?? input.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin,
       status: input.status ?? previous?.status ?? 'draft', title: input.title.trim().slice(0, 80),
       description: (input.description ?? '').trim().slice(0, 500), canvasRatio: input.canvasRatio,
       width: input.width, height: input.height, strokes: input.strokes, sourceRoundId: input.sourceRoundId,
@@ -83,7 +83,7 @@ export class FileArtworkRepository implements ArtworkRepository {
     const previous = input.id ? records.get(input.id) : undefined;
     if (previous && previous.ownerSessionId !== input.ownerSessionId) throw new Error('Artwork owner mismatch');
     const document: ArtworkDocument = {
-      id: previous?.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin,
+      id: previous?.id ?? input.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin,
       status: input.status ?? previous?.status ?? 'draft', title: input.title.trim().slice(0, 80),
       description: (input.description ?? '').trim().slice(0, 500), canvasRatio: input.canvasRatio,
       width: input.width, height: input.height, strokes: input.strokes, sourceRoundId: input.sourceRoundId,
