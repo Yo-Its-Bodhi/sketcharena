@@ -16,4 +16,9 @@ describe('prompt decks', () => {
     expect(randomWord('music', () => 0)).toBe(WORDS.music![0]);
     expect(randomWord('not-a-real-deck', () => 0)).toBe(WORDS.chaos![0]);
   });
+
+  it('skips prompts already used by the room until the deck is exhausted', () => {
+    const used = new Set<string>([WORDS.animals![0]!, WORDS.animals![1]!]);
+    expect(randomWord('animals', () => 0, used)).toBe(WORDS.animals![2]);
+  });
 });

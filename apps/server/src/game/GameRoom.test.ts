@@ -303,4 +303,36 @@ describe('GameRoom authoritative lifecycle', () => {
     expect(room.rounds).toHaveLength(0);
     expect(room.view().players.every((player) => player.score === 0)).toBe(true);
   });
+
+  it('keeps room chat in authoritative state and records one reaction per player on a guess', () => {
+    room.start('11111111-1111-4111-8111-111111111111'); room.beginRound();
+    const guesserSession = room.drawerId === aliceId ? '22222222-2222-4222-8222-222222222222' : '11111111-1111-4111-8111-111111111111';
+    room.submitGuess(guesserSession, 'absolutely not the answer');
+    const guess = room.view().feed.find((item) => item.kind === 'guess')!;
+    room.react(guesserSession, '😂', guess.id);
+    room.react(guesserSession, '💀', guess.id);
+    expect(room.view().feed.find((item) => item.id === guess.id)?.reactions).toEqual({ '💀': 1 });
+    expect(room.funnyGuesses.find((item) => item.id === guess.id)?.reactions).toEqual({ '💀': 1 });
+  });
+
+  it('does not repeat a prompt across consecutive eight-round matches while the deck has fresh cards', () => {
+    const prompts: string[] = [];
+    for (let match = 0; match < 2; match += 1) {
+      if (match) room.rematch('11111111-1111-4111-8111-111111111111');
+      room.start('11111111-1111-4111-8111-111111111111');
+      for (let round = 0; round < 8; round += 1) {
+        room.beginRound(); prompts.push(room.currentPrompt); room.finishRound('time'); vi.advanceTimersByTime(GAME.revealMs);
+      }
+    }
+    expect(new Set(prompts)).toHaveLength(16);
+  });
+
+  it('lets only the drawer move the complete Arena drawing', () => {
+    room.start('11111111-1111-4111-8111-111111111111'); room.beginRound();
+    const drawerSession = room.drawerId === aliceId ? '11111111-1111-4111-8111-111111111111' : '22222222-2222-4222-8222-222222222222';
+    const guesserSession = drawerSession.startsWith('1111') ? '22222222-2222-4222-8222-222222222222' : '11111111-1111-4111-8111-111111111111';
+    room.addStroke(drawerSession, { id: 'move-me', tool: 'pencil', color: '#171514', size: 6, points: [{ x: .25, y: .3 }], at: 0 });
+    room.moveCanvas(guesserSession, .2, .1); expect(room.strokes[0]?.points[0]).toMatchObject({ x: .25, y: .3 });
+    room.moveCanvas(drawerSession, .2, .1); expect(room.strokes[0]?.points[0]).toMatchObject({ x: .45, y: .4 });
+  });
 });

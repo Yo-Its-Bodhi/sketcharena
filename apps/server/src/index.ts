@@ -138,6 +138,7 @@ const roomCreateSchema = z.object({
 });
 const roomJoinSchema = z.object({ roomId: z.string().min(1).optional(), inviteCode: z.string().min(4).max(12).optional() }).refine((value) => value.roomId || value.inviteCode);
 const textSchema = z.object({ text: z.string().trim().min(1).max(160) });
+const canvasMoveSchema = z.object({ x: z.number().min(-1).max(1), y: z.number().min(-1).max(1) });
 const keepRoundSchema = z.object({ roundId: z.string().uuid() });
 const kickPlayerSchema = z.object({ playerId: z.string().min(1).max(24) });
 const reportPlayerSchema = z.object({ playerId: z.string().min(1).max(24), category: z.enum(['harassment', 'hate-or-threats', 'spam', 'cheating', 'unsafe-art', 'other']), detail: z.string().trim().min(10).max(500) });
@@ -579,7 +580,8 @@ io.on('connection', (socket) => {
   socket.on('chat:send', (payload, ack) => guarded(socket.id, ack, () => { const input = textSchema.parse(payload); currentRoomForSocket(sessionId, socket.id).sendChat(sessionId!, input.text); return undefined; }));
   socket.on('reaction:send', (payload, ack) => guarded(socket.id, ack, () => {
     const allowed = ['😂', '🔥', '💀', '👏', '🤯', '❤️', ...(equipped.reaction === 'screaming-pencil-reaction' ? ['✏️'] : []), ...(equipped.reaction === 'tiny-fire-reaction' ? ['🧨'] : [])];
-    const emoji = z.string().refine((value) => allowed.includes(value), 'That reaction is not unlocked').parse(payload.emoji); currentRoomForSocket(sessionId, socket.id).react(sessionId!, emoji); return undefined;
+    const input = z.object({ emoji: z.string().refine((value) => allowed.includes(value), 'That reaction is not unlocked'), targetId: z.string().uuid().optional() }).parse(payload);
+    currentRoomForSocket(sessionId, socket.id).react(sessionId!, input.emoji, input.targetId); return undefined;
   }));
   socket.on('draw:stroke', (stroke, ack) => guarded(socket.id, ack, () => {
     if (!drawLimit.take(socket.id)) throw new Error('Too many marks arrived at once—try that stroke again');
@@ -588,6 +590,7 @@ io.on('connection', (socket) => {
   socket.on('draw:preview', (stroke) => { if (!previewLimit.take(socket.id)) return; const parsed = strokeSchema.safeParse(stroke); const room = currentRoomForSocketOrNull(sessionId, socket.id); if (parsed.success && sessionId && room) room.previewStroke(sessionId, parsed.data); });
   socket.on('draw:clear', () => { if (!drawLimit.take(socket.id)) return; const room = currentRoomForSocketOrNull(sessionId, socket.id); if (sessionId && room) room.clearCanvas(sessionId); });
   socket.on('draw:undo', () => { if (!drawLimit.take(socket.id)) return; const room = currentRoomForSocketOrNull(sessionId, socket.id); if (sessionId && room) room.undo(sessionId); });
+  socket.on('draw:move', (payload) => { if (!drawLimit.take(socket.id)) return; const parsed = canvasMoveSchema.safeParse(payload); const room = currentRoomForSocketOrNull(sessionId, socket.id); if (parsed.success && sessionId && room) room.moveCanvas(sessionId, parsed.data.x, parsed.data.y); });
   socket.on('round:keep', (payload, ack) => guarded(socket.id, ack, async () => {
     const input = keepRoundSchema.parse(payload);
     const room = currentRoomForSocket(sessionId, socket.id); room.keepRound(sessionId!, input.roundId);
