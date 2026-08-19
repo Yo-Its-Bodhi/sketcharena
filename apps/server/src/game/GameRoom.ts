@@ -30,6 +30,7 @@ interface PlayerRecord {
   connected: boolean;
   disconnectAt: number | null;
   ready: boolean;
+  completionEligible: boolean;
 }
 
 export interface RoomEventMap {
@@ -128,16 +129,22 @@ export class GameRoom {
       else this.emitState();
       return this.playerView(returning);
     }
-    if (this.phase !== 'lobby') throw new Error('This match is already underway');
+    if (this.phase === 'afterparty') throw new Error('This match has finished—join the next show');
     if (this.players.size >= this.maxPlayers) throw new Error('The arena is full');
+    const lateArrival = this.phase !== 'lobby';
     const player: PlayerRecord = {
       id: randomUUID().slice(0, 12), socketId, sessionId, name, avatarSeed: Math.floor(this.random() * 10_000), avatarItem: cosmetics?.avatar, titleItem: cosmetics?.title, frameItem: cosmetics?.frame,
-      score: 0, roundScore: 0, streak: 0, maxStreak: 0, connected: true, disconnectAt: null, ready: false,
+      score: 0, roundScore: 0, streak: 0, maxStreak: 0, connected: true, disconnectAt: null, ready: false, completionEligible: !lateArrival,
     };
     this.players.set(player.id, player);
     this.hostId ??= player.id;
-    this.publishFeed(this.system(`${name} entered the arena`));
-    this.emitState();
+    this.publishFeed(this.system(lateArrival ? `${name} crashed the party — guessing now, drawing next round` : `${name} entered the arena`));
+    if (lateArrival) this.rebuildDrawerOrder();
+    if (this.phase === 'paused' && this.connectedPlayerCount() >= GAME.minPlayers) {
+      if (this.pausedRoundRemainingMs !== null) this.resumeDrawing();
+      else this.beginCountdown();
+    }
+    else this.emitState();
     return this.playerView(player);
   }
 
@@ -227,7 +234,7 @@ export class GameRoom {
     this.drawerTurns.clear();
     this.rebuildDrawerOrder();
     for (const player of this.players.values()) {
-      player.score = 0; player.roundScore = 0; player.streak = 0; player.maxStreak = 0; player.ready = false;
+      player.score = 0; player.roundScore = 0; player.streak = 0; player.maxStreak = 0; player.ready = false; player.completionEligible = true;
     }
     this.beginCountdown();
   }
@@ -488,6 +495,7 @@ export class GameRoom {
   private resetToLobby(message: string): void {
     this.clearTimer();
     this.phase = 'lobby'; this.drawerId = null; this.deadline = null; this.currentPrompt = ''; this.strokes = []; this.pausedRoundRemainingMs = null;
+    for (const player of this.players.values()) player.completionEligible = true;
     this.publishFeed(this.system(message));
     this.emitState();
   }
@@ -533,13 +541,14 @@ export class GameRoom {
       const bMetric = metrics.get(b.id) ?? { correct: 0, elapsedMs: 0 };
       return b.score - a.score || bMetric.correct - aMetric.correct || aMetric.elapsedMs - bMetric.elapsedMs;
     });
-    const leader = standings[0] ?? null;
+    const eligibleStandings = standings.filter((player) => !player.lateArrival);
+    const leader = eligibleStandings[0] ?? standings[0] ?? null;
     const leaderMetric = leader ? metrics.get(leader.id) ?? { correct: 0, elapsedMs: 0 } : null;
-    const winners = !leader || !leaderMetric ? [] : standings.filter((player) => {
+    const winners = !leader || !leaderMetric ? [] : eligibleStandings.filter((player) => {
       const metric = metrics.get(player.id) ?? { correct: 0, elapsedMs: 0 };
       return player.score === leader.score && metric.correct === leaderMetric.correct && metric.elapsedMs === leaderMetric.elapsedMs;
     });
-    const runnerUp = standings[winners.length] ?? null;
+    const runnerUp = eligibleStandings[winners.length] ?? null;
     const runnerMetric = runnerUp ? metrics.get(runnerUp.id) ?? { correct: 0, elapsedMs: 0 } : null;
     const tieBreak = winners.length > 1
       ? { rule: 'shared' as const, label: 'Still tied after points, correct guesses and total solve time — shared champions.' }
@@ -554,7 +563,7 @@ export class GameRoom {
     const cosmeticSeed = player.avatarItem === 'yellow-weirdo-avatar' || player.avatarItem === 'golden-chaos-avatar' ? 1 : player.avatarItem === 'green-chaos-avatar' ? 2 : player.avatarSeed;
     return { id: player.id, sessionId: player.sessionId, name: player.name, avatarSeed: cosmeticSeed, avatarItem: player.avatarItem, titleItem: player.titleItem, frameItem: player.frameItem, score: player.score,
       roundScore: player.roundScore, streak: player.streak, isHost: player.id === this.hostId, isDrawer: player.id === this.drawerId,
-      hasGuessed: this.correct.has(player.id), connected: player.connected, ready: player.ready };
+      hasGuessed: this.correct.has(player.id), connected: player.connected, ready: player.ready, lateArrival: !player.completionEligible };
   }
   private system(text: string): FeedItem { return { id: randomUUID(), kind: 'system', text, at: this.clock() }; }
   private shuffle(values: string[]): string[] {

@@ -163,6 +163,40 @@ describe('GameRoom authoritative lifecycle', () => {
     expect(room.rounds).toHaveLength(8);
   });
 
+  it('lets a late arrival guess immediately and enter the next-round drawing rotation', () => {
+    room.start('11111111-1111-4111-8111-111111111111'); room.beginRound();
+    const charlieSession = '33333333-3333-4333-8333-333333333333';
+    const charlie = room.join(charlieSession, 'socket-c', 'Charlie');
+
+    expect(charlie).toMatchObject({ score: 0, lateArrival: true, isDrawer: false });
+    expect(room.currentBriefForSession(charlieSession)).toBeNull();
+    expect(room.submitGuess(charlieSession, room.currentPrompt)).toEqual({ correct: true, close: false });
+    expect(room.view().players.find((player) => player.id === charlie.id)?.score).toBeGreaterThan(0);
+
+    room.finishRound('time'); vi.advanceTimersByTime(GAME.revealMs);
+    const nextDrawers: string[] = [];
+    for (let round = 1; round < GAME.matchRounds && !nextDrawers.includes(charlie.id); round += 1) {
+      room.beginRound(); nextDrawers.push(room.drawerId!); room.finishRound('time'); vi.advanceTimersByTime(GAME.revealMs);
+    }
+    expect(nextDrawers).toContain(charlie.id);
+  });
+
+  it('keeps late arrivals out of the crown until they complete a fresh match', () => {
+    room.start('11111111-1111-4111-8111-111111111111'); room.beginRound();
+    const charlie = room.join('33333333-3333-4333-8333-333333333333', 'socket-c', 'Charlie');
+    room.finishRound('time'); vi.advanceTimersByTime(GAME.revealMs);
+    while (room.phase !== 'afterparty') { room.beginRound(); room.finishRound('time'); vi.advanceTimersByTime(GAME.revealMs); }
+    for (const player of room.players.values()) player.score = player.id === charlie.id ? 10_000 : 100;
+
+    const result = room.matchResult()!;
+    expect(result.standings[0]).toMatchObject({ name: 'Charlie', lateArrival: true });
+    expect(result.winners.every((player) => !player.lateArrival)).toBe(true);
+
+    room.rematch('11111111-1111-4111-8111-111111111111');
+    room.start('11111111-1111-4111-8111-111111111111');
+    expect(room.view().players.find((player) => player.id === charlie.id)?.lateArrival).toBe(false);
+  });
+
   it('shares the crown instead of silently favoring join order on a complete tie', () => {
     room.start('11111111-1111-4111-8111-111111111111');
     for (let round = 0; round < GAME.matchRounds; round += 1) {
@@ -270,6 +304,15 @@ describe('GameRoom authoritative lifecycle', () => {
     vi.advanceTimersByTime(GAME.revealMs);
     expect(room.phase).toBe('paused');
     room.join('22222222-2222-4222-8222-222222222222', 'socket-b2', 'Bob');
+    expect(room.phase).toBe('countdown');
+  });
+
+  it('lets a late arrival replace a missing seat between rounds', () => {
+    room.start('11111111-1111-4111-8111-111111111111'); room.beginRound(); room.finishRound('time');
+    room.disconnect('22222222-2222-4222-8222-222222222222');
+    vi.advanceTimersByTime(GAME.revealMs);
+    expect(room.phase).toBe('paused');
+    expect(room.join('33333333-3333-4333-8333-333333333333', 'socket-c', 'Charlie')).toMatchObject({ lateArrival: true });
     expect(room.phase).toBe('countdown');
   });
 
