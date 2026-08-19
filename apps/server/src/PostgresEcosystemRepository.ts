@@ -329,7 +329,7 @@ export class PostgresEcosystemRepository {
       const claim = await client.query(`insert into bodhix_reward_claims(id,entitlement_id,account_id,app_id,quantity,status,idempotency_key,reserved_at,metadata)
         values($1,$2,$3,$4,$5,'reserved',$6,$7,$8) returning *`, [randomUUID(), entitlementId, authenticated.account.id, appId, quantity, idempotencyKey, new Date(now), JSON.stringify({ rewardKind: row.kind })]);
       const remaining = Number(row.remaining) - quantity;
-      await client.query(`update bodhix_entitlements set remaining=$2,status=case when $2=0 then 'consumed' else status end where id=$1`, [entitlementId, remaining]);
+      await client.query(`update bodhix_entitlements set remaining=$2::bigint,status=case when $2::bigint=0 then 'consumed' else status end where id=$1`, [entitlementId, remaining]);
       return claim.rows[0];
     });
   }
