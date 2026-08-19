@@ -324,12 +324,12 @@ export class MintService {
     const activeContract = this.config.contractAddress?.toLowerCase();
     const attemptedContract = (record?.contractAddress ?? art.mint?.contractAddress)?.toLowerCase();
     const retiredContract = Boolean(activeContract && attemptedContract && activeContract !== attemptedContract);
-    const expiredPreparation = record?.status === 'prepared' && record.expiresAt <= this.clock();
-    if (!retiredContract && !expiredPreparation) throw new MintServiceError('This artwork has a mint in progress on the active contract. Wait for it to confirm or expire before deleting the server copy.', 409);
+    const transactionSubmitted = record?.status === 'submitted' || art.mint?.status === 'submitted';
+    if (transactionSubmitted && !retiredContract) throw new MintServiceError('This artwork has a transaction submitted to the active contract. Wait for it to confirm or fail before deleting the server copy.', 409);
 
     if (record && inProgress) {
       await this.repository.saveMint({ ...record, status: record.status === 'prepared' ? 'expired' : 'failed',
-        error: retiredContract ? 'Abandoned after the collection contract was retired' : 'Expired before the artwork was deleted', updatedAt: this.clock() });
+        error: retiredContract ? 'Abandoned after the collection contract was retired' : 'Unsigned voucher abandoned when the artwork was deleted', updatedAt: this.clock() });
     }
   }
 
