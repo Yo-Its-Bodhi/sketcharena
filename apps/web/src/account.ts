@@ -1,7 +1,7 @@
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import type { PublicKeyCredentialCreationOptionsJSON, PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/browser';
 
-export interface PlayerAccountInfo { id: string; name: string; secured: boolean; securedAt?: number; createdAt: number; sessionId: string; passkeyCount?: number; }
+export interface PlayerAccountInfo { id: string; name: string; secured: boolean; passwordSet: boolean; securedAt?: number; createdAt: number; sessionId: string; passkeyCount?: number; }
 export interface DeviceSessionInfo { id: string; label: string; createdAt: number; lastSeenAt: number; expiresAt: number; current: boolean; }
 
 async function json<T>(response: Response): Promise<T> {
@@ -10,12 +10,21 @@ async function json<T>(response: Response): Promise<T> {
 }
 
 export async function ensureDeviceSession(legacyCredential: string, name: string): Promise<PlayerAccountInfo> {
+  void legacyCredential; void name;
   const current = await fetch('/api/account', { credentials: 'include' });
   if (current.ok) return current.json() as Promise<PlayerAccountInfo>;
-  return json<PlayerAccountInfo>(await fetch('/api/account/migrate', {
-    method: 'POST', credentials: 'include', headers: { authorization: `Bearer ${legacyCredential}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ name, deviceLabel: deviceLabel() }),
+  throw new Error('Sign in again to continue');
+}
+
+export async function startPasswordSession(recoveryCredential: string, name: string, password: string): Promise<PlayerAccountInfo> {
+  const current = await fetch('/api/account', { credentials: 'include' }); if (current.ok) return current.json() as Promise<PlayerAccountInfo>;
+  return json<PlayerAccountInfo>(await fetch('/api/account/password/session', {
+    method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, password, recoveryCredential, deviceLabel: deviceLabel() }),
   }));
+}
+
+export async function updatePassword(password: string): Promise<PlayerAccountInfo> {
+  return json<PlayerAccountInfo>(await fetch('/api/account/password', { method: 'PUT', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) }));
 }
 
 export async function accountStatus(): Promise<PlayerAccountInfo | null> {

@@ -113,6 +113,7 @@ const adminLimit = new SlidingLimit(40, 60_000);
 const walletLimit = new SlidingLimit(12, 60_000);
 const promotionLimit = new SlidingLimit(10, 60_000);
 const reportLimit = new SlidingLimit(3, 3_600_000);
+const passwordLimit = new SlidingLimit(8, 15 * 60_000);
 const metricCounters = { httpTotal: 0, http4xx: 0, http5xx: 0, socketRejected: 0, rateLimited: 0 };
 
 const backstageAuth = new BackstageAuth();
@@ -125,6 +126,9 @@ const nameSchema = z.string().trim().min(2).max(20).regex(/^[\p{L}\p{N}_. -]+$/u
 const credentialSchema = z.string().regex(/^[0-9a-f]{64}$/i);
 const sessionSchema = z.object({ credential: credentialSchema.optional(), name: nameSchema });
 const accountMigrationSchema = z.object({ name: nameSchema, deviceLabel: z.string().trim().min(2).max(80).default('This browser') });
+const passwordSchema = z.string().min(8).max(128);
+const passwordSessionSchema = z.object({ name: nameSchema, password: passwordSchema, recoveryCredential: credentialSchema, deviceLabel: z.string().trim().min(2).max(80).default('This browser') });
+const passwordUpdateSchema = z.object({ password: passwordSchema });
 const passkeyRegistrationSchema = z.object({ challengeId: z.string().uuid(), label: z.string().trim().min(2).max(80).default('My passkey'), response: z.object({ id: z.string().min(1) }).passthrough() });
 const passkeyAuthenticationSchema = z.object({ challengeId: z.string().uuid(), deviceLabel: z.string().trim().min(2).max(80).default('Passkey device'), response: z.object({ id: z.string().min(1) }).passthrough() });
 const roomCreateSchema = z.object({
@@ -198,6 +202,24 @@ app.post('/api/account/migrate', async (request, response) => {
     const message = error instanceof Error && /name.*claimed/i.test(error.message) ? error.message : 'That name could not be claimed';
     return response.status(409).json({ error: message });
   }
+});
+app.post('/api/account/password/session', async (request, response) => {
+  const key = request.ip ?? 'unknown'; if (!passwordLimit.take(key)) { metricCounters.rateLimited += 1; return response.status(429).json({ error: 'Too many sign-in attempts. Wait a few minutes and try again.' }); }
+  const parsed = passwordSessionSchema.safeParse(request.body); if (!parsed.success) return response.status(400).json({ error: 'Use your player name and a password of at least 8 characters' });
+  try {
+    const authenticated = await accounts.startWithPassword(parsed.data.recoveryCredential, parsed.data.name, parsed.data.password, parsed.data.deviceLabel);
+    passwordLimit.forget(key); setPlayerCookie(response, authenticated.token, authenticated.session.expiresAt);
+    log('info', authenticated.created ? 'account.password_created' : 'account.password_signed_in', { accountId: authenticated.account.id, sessionId: authenticated.session.id });
+    return response.status(authenticated.created ? 201 : 200).json(publicAccount(authenticated.account, authenticated.session.id));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'That name or password is incorrect';
+    return response.status(/recovery key/i.test(message) ? 409 : 401).json({ error: message });
+  }
+});
+app.put('/api/account/password', async (request, response) => {
+  const authenticated = await playerAccountFromRequest(request); if (!authenticated) return response.status(401).json({ error: 'Player authentication required' });
+  const parsed = passwordUpdateSchema.safeParse(request.body); if (!parsed.success) return response.status(400).json({ error: 'Use a password of at least 8 characters' });
+  const account = await accounts.setPassword(authenticated.account, parsed.data.password); return response.json(publicAccount(account, authenticated.session.id));
 });
 app.get('/api/account', async (request, response) => {
   const authenticated = await playerAccountFromRequest(request); if (!authenticated) return response.status(401).json({ error: 'Player authentication required' });
@@ -661,7 +683,7 @@ function setPlayerCookie(response: express.Response, token: string, expiresAt: n
   response.cookie(SESSION_COOKIE, token, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'lax', path: '/', expires: new Date(expiresAt), priority: 'high' });
 }
 function clearPlayerCookie(response: express.Response): void { response.clearCookie(SESSION_COOKIE, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'lax', path: '/' }); }
-function publicAccount(account: { id: string; name: string; securedAt?: number; createdAt: number }, sessionId: string) { return { id: account.id, name: account.name, secured: Boolean(account.securedAt), securedAt: account.securedAt, createdAt: account.createdAt, sessionId }; }
+function publicAccount(account: { id: string; name: string; passwordHash?: string; securedAt?: number; createdAt: number }, sessionId: string) { return { id: account.id, name: account.name, secured: Boolean(account.securedAt), passwordSet: Boolean(account.passwordHash), securedAt: account.securedAt, createdAt: account.createdAt, sessionId }; }
 function publicProgression(player: PlayerProgress): PlayerProgress {
   const secretCampaign = 'season-0-founding-weirdos-season-1-premium';
   const visibleItemIds = new Set<string>(ACTIVE_SEASON_ITEMS.map((item) => item.id));

@@ -6,7 +6,7 @@ import { normalizeArtworkStrokes } from './strokeTransport';
 import { gameAudio } from './sound';
 import { socket } from './socket';
 import { walletError } from './walletErrors';
-import { accountStatus, ensureDeviceSession, listDeviceSessions, revokeDeviceSession, secureAccountWithPasskey, signInWithPasskey, type DeviceSessionInfo, type PlayerAccountInfo } from './account';
+import { accountStatus, ensureDeviceSession, listDeviceSessions, revokeDeviceSession, secureAccountWithPasskey, signInWithPasskey, startPasswordSession, updatePassword, type DeviceSessionInfo, type PlayerAccountInfo } from './account';
 
 type Screen = 'landing' | 'lobby' | 'arena' | 'studio' | 'vault' | 'archive' | 'leaderboard' | 'account' | 'afterparty' | 'backstage';
 type AdminMintRecord = { id: string; artworkId: string; ownerSessionId: string; status: 'prepared' | 'submitted' | 'confirmed' | 'failed' | 'expired'; walletAddress: string; usesMintCredit: boolean; discountBps?: number; expiresAt: number; transactionHash?: string; tokenId?: string; error?: string; updatedAt: number };
@@ -32,6 +32,7 @@ const storedCredential = localStorage.getItem('arena-credential');
 let sessionCredential = storedCredential ?? Array.from(crypto.getRandomValues(new Uint8Array(32)), (value) => value.toString(16).padStart(2, '0')).join('');
 localStorage.setItem('arena-credential', sessionCredential);
 let sessionId = '';
+const rememberSession = (id: string) => { sessionId = id; localStorage.setItem('arena-session', id); };
 
 export function App() {
   const [screen, setScreen] = useState<Screen>(() => location.pathname === '/backstage' ? 'backstage' : location.pathname === '/archive' ? 'archive' : location.pathname === '/leaderboard' ? 'leaderboard' : location.pathname === '/account' ? 'account' : 'landing');
@@ -107,20 +108,27 @@ export function App() {
     return () => clearTimeout(timer);
   }, [error]);
 
-  const enter = async () => {
+  const resumeAuthenticatedAccount = (canonicalName: string): Promise<{ sessionId: string; name: string }> => new Promise((resolve, reject) => {
+    const resume = () => socket.emit('session:resume', { credential: sessionCredential, name: canonicalName }, (ack) => {
+      if (!ack.ok || !ack.data) reject(new Error(ack.error ?? 'Could not enter')); else resolve(ack.data);
+    });
+    socket.once('connect', resume); socket.disconnect(); socket.connect();
+  });
+
+  const enter = async (password: string) => {
     const clean = name.trim(); if (clean.length < 2) return setError('Give the crowd a name to yell.');
     setError('');
     let account: PlayerAccountInfo;
-    try { account = await ensureDeviceSession(sessionCredential, clean); }
+    try { account = await startPasswordSession(sessionCredential, clean, password); }
     catch (reason) { return setError(reason instanceof Error ? reason.message : 'That name could not be claimed'); }
     const canonicalName = account.name; setName(canonicalName); localStorage.setItem('arena-name', canonicalName);
-    socket.emit('session:resume', { credential: sessionCredential, name: canonicalName }, (ack) => {
-      if (!ack.ok || !ack.data) return setError(ack.error ?? 'Could not enter');
-      sessionId = ack.data.sessionId; setName(ack.data.name); localStorage.setItem('arena-name', ack.data.name); localStorage.setItem('arena-session', sessionId); socket.emit('rooms:subscribe'); void refreshProgression();
+    try {
+      const resumed = await resumeAuthenticatedAccount(canonicalName);
+      rememberSession(resumed.sessionId); setName(resumed.name); localStorage.setItem('arena-name', resumed.name); socket.emit('rooms:subscribe'); void refreshProgression();
       const invited = new URLSearchParams(location.search).get('join');
       if (invited) socket.emit('room:join', { inviteCode: invited }, (joined) => { handleAck(joined); if (joined.ok) history.replaceState({}, '', location.pathname); });
       else setScreen('lobby');
-    });
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not enter'); }
   };
   const handleAck = <T,>(ack: Ack<T>) => { if (!ack.ok) setError(ack.error ?? 'Something went sideways'); };
   const keepRound = useCallback(async (round: RoundResult): Promise<ArtworkDocument> => {
@@ -149,7 +157,7 @@ export function App() {
   const passkeyLogin = async () => {
     try {
       const account = await signInWithPasskey(); localStorage.setItem('arena-name', account.name); setName(account.name); setError('');
-      if (socket.connected) socket.disconnect(); socket.connect(); setScreen('lobby');
+      const resumed = await resumeAuthenticatedAccount(account.name); rememberSession(resumed.sessionId); socket.emit('rooms:subscribe'); void refreshProgression(); setScreen('lobby');
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Passkey sign-in failed'); }
   };
   const createRoom = (options: CreateRoomOptions) => socket.emit('room:create', options, (ack) => {
@@ -171,7 +179,7 @@ export function App() {
     <div className="paper-noise"/><div className="cinematic-vignette"/><div className="stage-light stage-light-a"/><div className="stage-light stage-light-b"/><SparkField/>
     {(screen === 'vault' || screen === 'archive') && <div className="section-floating-nav"><MainNav active={screen} play={() => { history.pushState({}, '', '/'); setScreen(name ? 'lobby' : 'landing'); }} studio={() => { history.pushState({}, '', '/'); setScreen('studio'); }} vault={() => { history.pushState({}, '', '/'); setScreen('vault'); }} archive={openArchive} leaderboard={openLeaderboard}/></div>}
     <AnimatePresence mode="wait">
-      {screen === 'landing' && <Landing key="landing" name={name} setName={setName} enter={() => void enter()} passkeyLogin={() => void passkeyLogin()} studio={() => setScreen('studio')} vault={() => setScreen('vault')} archive={openArchive} leaderboard={openLeaderboard} connected={connected} error={error}/>}
+      {screen === 'landing' && <Landing key="landing" name={name} setName={setName} enter={(password) => void enter(password)} passkeyLogin={() => void passkeyLogin()} studio={() => setScreen('studio')} vault={() => setScreen('vault')} archive={openArchive} leaderboard={openLeaderboard} connected={connected} error={error}/>}
       {screen === 'lobby' && <Lobby key="lobby" name={name} rooms={rooms} progression={progression} acknowledgeReward={acknowledgeReward} equipItem={equipItem} redeemPromotion={redeemPromotion} create={createRoom} join={(id) => joinRoom({ roomId: id })} joinCode={(code) => joinRoom({ inviteCode: code })} studio={() => setScreen('studio')} vault={() => setScreen('vault')} archive={openArchive} leaderboard={openLeaderboard} account={openAccount}/>}
       {screen === 'arena' && room && <Arena key="arena" connected={connected} room={room} prompt={prompt} feed={feed} inviteCode={inviteCode} reveal={reveal} setReveal={setReveal} savedRounds={savedRounds} keepRound={keepRound} reportError={setError} leave={() => socket.emit('room:leave', (ack) => { handleAck(ack); if (!ack.ok) return; setRoom(null); setFeed([]); setInviteCode(''); setScreen('lobby'); socket.emit('rooms:subscribe'); })}/>}
       {screen === 'studio' && <Studio key="studio" back={() => setScreen(name ? 'lobby' : 'landing')} vault={() => setScreen('vault')}/>} 
@@ -195,8 +203,8 @@ export function App() {
   </div></MotionConfig>;
 }
 
-function Landing({ name, setName, enter, passkeyLogin, studio, vault, archive, leaderboard, connected, error }: { name: string; setName: (value: string) => void; enter: () => void; passkeyLogin: () => void; studio: () => void; vault: () => void; archive: () => void; leaderboard: () => void; connected: boolean; error: string }) {
-  const [recoveryOpen, setRecoveryOpen] = useState(false);
+function Landing({ name, setName, enter, passkeyLogin, studio, vault, archive, leaderboard, connected, error }: { name: string; setName: (value: string) => void; enter: (password: string) => void; passkeyLogin: () => void; studio: () => void; vault: () => void; archive: () => void; leaderboard: () => void; connected: boolean; error: string }) {
+  const [recoveryOpen, setRecoveryOpen] = useState(false); const [password, setPassword] = useState('');
   return <motion.main className="landing screen" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, scale: .98 }}>
     <header className="topbar brand-topbar"><Brand/><MainNav active="play" play={() => document.getElementById('arena-entry')?.scrollIntoView({ behavior: 'smooth', block: 'center' })} studio={studio} vault={vault} archive={archive} leaderboard={leaderboard}/><div className="landing-access"><button onClick={() => document.getElementById('arena-entry')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>ACCOUNT / SIGN IN ↓</button><span className={`connection ${connected ? 'online' : ''}`}><i/>{connected ? 'stage online' : 'warming up'}</span></div></header>
     <section className="hero">
@@ -206,8 +214,9 @@ function Landing({ name, setName, enter, passkeyLogin, studio, vault, archive, l
       <p>The drawing game where panic is a feature and every disaster can become collectible.</p>
       <div className="hero-proof" aria-label="Game features"><span><b>45</b> SEC ROUNDS</span><i/><span><b>∞</b> BAD GUESSES</span><i/><span><b>1</b> GLORIOUS MESS</span></div>
       <div className="entry-card" id="arena-entry">
-        <label>WHAT SHOULD THE CROWD CALL YOU?</label>
-        <div><input value={name} maxLength={20} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && enter()} placeholder="Your stage name" autoFocus/><button className="primary" onClick={enter}>ENTER THE ARENA <b>→</b></button></div>
+        <label>YOUR SKETCH ARENA ACCOUNT</label>
+        <div className="account-fields"><input value={name} maxLength={20} onChange={(event) => setName(event.target.value)} placeholder="Player name" autoFocus autoComplete="username"/><input type="password" value={password} minLength={8} maxLength={128} onChange={(event) => setPassword(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && enter(password)} placeholder="Password · 8+ characters" autoComplete="current-password"/><button className="primary" onClick={() => enter(password)}>ENTER THE ARENA <b>→</b></button></div>
+        <small className="account-entry-note">NEW HERE? THESE CREATE YOUR ACCOUNT. RETURNING? THEY SIGN YOU BACK IN.</small>
         <button className="passkey-login" onClick={passkeyLogin}>⌁ SIGN IN WITH A PASSKEY</button><button className="passkey-login account-restore-login" onClick={() => setRecoveryOpen(true)}>↻ RESTORE WITH A RECOVERY KEY</button>{error && <span className="error">{error}</span>}
       </div>
       <button className="studio-link" onClick={studio}><span>✦</span><b>SOLO STUDIO</b><small>Take your time. Make something beautiful.</small><i>→</i></button>
@@ -287,6 +296,7 @@ function PlayerAccount({ progression, equipItem, home, vault, leaderboard }: { p
   const [message, setMessage] = useState('');
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [signOutArmed, setSignOutArmed] = useState(false);
+  const [passwordDraft, setPasswordDraft] = useState(''); const [passwordConfirm, setPasswordConfirm] = useState(''); const [passwordBusy, setPasswordBusy] = useState(false);
   useEffect(() => {
     void Promise.all([
       fetch('/api/season/items').then((response) => response.ok ? response.json() as Promise<SeasonItemDefinition[]> : []),
@@ -301,9 +311,15 @@ function PlayerAccount({ progression, equipItem, home, vault, leaderboard }: { p
   }, [progression.sessionId]);
   const equip = async (itemId: string) => { setBusyItem(itemId); setMessage(''); try { await equipItem(itemId); setMessage('Loadout updated. The crowd has been warned.'); } catch (reason) { setMessage(reason instanceof Error ? reason.message : 'That cosmetic refused to cooperate.'); } finally { setBusyItem(''); } };
   const secure = async () => { setMessage(''); try { setAccount(await secureAccountWithPasskey('Sketch Arena passkey')); setDevices(await listDeviceSessions()); setMessage('Passkey added. Your chaos can now follow you safely.'); } catch (reason) { setMessage(reason instanceof Error ? reason.message : 'Passkey setup failed.'); } };
+  const savePassword = async () => {
+    if (passwordDraft.length < 8) return setMessage('Use at least 8 characters. Your future self deserves better than “password”.');
+    if (passwordDraft !== passwordConfirm) return setMessage('Those passwords do not match. Even the weirdos noticed.');
+    setPasswordBusy(true); setMessage(''); try { setAccount(await updatePassword(passwordDraft)); setPasswordDraft(''); setPasswordConfirm(''); setMessage('Password saved. You can now sign in on any device with your player name.'); }
+    catch (reason) { setMessage(reason instanceof Error ? reason.message : 'Password setup failed.'); } finally { setPasswordBusy(false); }
+  };
   const revoke = async (device: DeviceSessionInfo) => { try { await revokeDeviceSession(device.id); setDevices((current) => current.filter((entry) => entry.id !== device.id)); setMessage(`${device.label} signed out.`); } catch (reason) { setMessage(reason instanceof Error ? reason.message : 'Could not sign that device out.'); } };
   const signOut = async () => {
-    if (!signOutArmed) { setSignOutArmed(true); setMessage(account?.secured ? 'One more click signs this device out. Your passkey can bring the account back.' : 'This account has no passkey. Back up its recovery key first if you may want it again, then confirm.'); return; }
+    if (!signOutArmed) { setSignOutArmed(true); setMessage(account?.passwordSet ? 'One more click signs this device out. Your name and password can bring the account back.' : 'This account has no password. Set one or back up its recovery key before signing out.'); return; }
     await fetch('/api/account/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined); socket.disconnect();
     for (const key of ['arena-name','arena-session','arena-credential','sketch-equipped-brush','sketch-equipped-reaction']) localStorage.removeItem(key);
     location.assign('/');
@@ -327,7 +343,7 @@ function PlayerAccount({ progression, equipItem, home, vault, leaderboard }: { p
       <section className="account-panel loadout-panel"><header><small>THE LOOK</small><h2>CHANGE YOUR FACE.<br/>KEEP YOUR NAME.</h2><p>Only things you have actually earned appear here. Future-season contraband stays backstage.</p></header>{slots.map((slot) => { const choices = unlocked.filter((item) => item.slot === slot); return choices.length ? <div className="loadout-row" key={slot}><b>{slot.toUpperCase()}</b><div>{choices.map((item) => { const active = progression.equipped[slot] === item.id; return <button className={active ? 'equipped' : ''} disabled={busyItem === item.id} onClick={() => void equip(item.id)} key={item.id}><i style={{ background: item.previewColor }}>{item.glyph}</i><span><strong>{item.name}</strong><small>{item.description}</small></span><em>{active ? '✓ WEARING IT' : busyItem === item.id ? 'CHANGING…' : 'EQUIP'}</em></button>; })}</div></div> : null; })}{!unlocked.length && <div className="account-empty">Your wardrobe is emotionally unavailable. Level up to unlock the first questionable choice.</div>}</section>
       <section className="account-panel rewards-wallet"><header><small>MINTS, VOUCHERS & GIFTS</small><h2>THE GOOD STUFF<br/>DRAWER.</h2></header><div className="wallet-totals"><span><b>{creditsLeft}</b><small>FREE MINTS READY</small></span><span><b>{discounts.length}</b><small>ACTIVE DISCOUNTS</small></span><span><b>{minted.length}</b><small>ON-CHAIN TROPHIES</small></span></div><div className="benefit-list">{[...mintCredits,...discounts].map((reward) => <article key={reward.id}><b>{reward.kind === 'mint-credit' ? `${reward.amount - (reward.redeemedAmount ?? 0)} FREE MINT` : `${(reward.discountBps ?? 0) / 100}% OFF`}</b><span>{reward.reason}</span><small>{reward.expiresAt ? `USE BY ${new Date(reward.expiresAt).toLocaleDateString()}` : 'STAYS UNTIL USED'}</small></article>)}{!mintCredits.length && !discounts.length && <div className="account-empty">No vouchers hiding in the sofa. Battle Pass rewards and promo gifts land here.</div>}</div><button className="primary" onClick={vault}>OPEN ARTWORK VAULT →</button></section>
       <section className="account-panel badge-cabinet"><header><small>ACHIEVEMENTS & BADGES</small><h2>RECEIPTS FOR<br/>SHOWING UP.</h2></header><div>{progression.achievements.map((id) => <article key={id}><span>★</span><b>{achievementNames[id] ?? id.replaceAll('-', ' ')}</b></article>)}{!progression.achievements.length && <div className="account-empty">A pristine trophy shelf. Deeply suspicious.</div>}</div><button onClick={leaderboard}>SEE THE HUGE LEADERBOARD →</button></section>
-      <section className="account-panel security-panel"><header><small>ACCOUNT AUTHORITY</small><h2>KEEP YOUR<br/>WEIRDNESS YOURS.</h2><p>{account?.secured ? 'Your name and collection are protected by a passkey.' : 'Add a passkey so nobody can become you by typing your name.'}</p></header><div className={`security-state ${account?.secured ? 'secured' : ''}`}><b>{account?.secured ? '✓ PASSKEY PROTECTED' : '⚠ LOCAL DEVICE ONLY'}</b><span>{account?.secured ? `${account.passkeyCount ?? 1} passkey${(account.passkeyCount ?? 1) === 1 ? '' : 's'} connected` : 'Face ID, Touch ID, Windows Hello or your phone can secure this account.'}</span><button onClick={() => void secure()}>{account?.secured ? '＋ ADD ANOTHER PASSKEY' : 'SECURE MY ACCOUNT →'}</button></div><div className="account-devices"><small>SIGNED-IN DEVICES</small>{devices.map((device) => <div key={device.id}><span><b>{device.label}</b><small>{device.current ? 'THIS DEVICE' : `LAST SEEN ${new Date(device.lastSeenAt).toLocaleDateString()}`}</small></span>{!device.current && <button onClick={() => void revoke(device)}>SIGN OUT</button>}</div>)}</div><button className="recovery-link" onClick={() => setRecoveryOpen(true)}>BACKUP / RESTORE / RECOVERY →</button><button className={`account-signout ${signOutArmed ? 'armed' : ''}`} onClick={() => void signOut()}>{signOutArmed ? 'CONFIRM: SIGN OUT THIS DEVICE' : 'SIGN OUT / SWITCH ACCOUNT'}</button>{signOutArmed && <button className="account-signout-cancel" onClick={() => { setSignOutArmed(false); setMessage('Sign-out cancelled.'); }}>NEVER MIND</button>}</section>
+      <section className="account-panel security-panel"><header><small>ACCOUNT AUTHORITY</small><h2>KEEP YOUR<br/>WEIRDNESS YOURS.</h2><p>{account?.passwordSet ? 'Your player name and password work across your devices.' : 'Add a password now so this account is not trapped on one browser.'}</p></header><div className={`security-state ${account?.passwordSet ? 'secured' : ''}`}><b>{account?.passwordSet ? '✓ PASSWORD PROTECTED' : '⚠ PASSWORD NEEDED'}</b><span>{account?.passwordSet ? 'Use your exact player name and password anywhere.' : 'Existing beta account detected. Give it a proper front door.'}</span></div><div className="account-password"><small>{account?.passwordSet ? 'CHANGE PASSWORD' : 'CREATE PASSWORD'}</small><input type="password" value={passwordDraft} minLength={8} maxLength={128} onChange={(event) => setPasswordDraft(event.target.value)} placeholder="New password · 8+ characters" autoComplete="new-password"/><input type="password" value={passwordConfirm} minLength={8} maxLength={128} onChange={(event) => setPasswordConfirm(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && void savePassword()} placeholder="Type it again" autoComplete="new-password"/><button disabled={passwordBusy} onClick={() => void savePassword()}>{passwordBusy ? 'HASHING THE SECRET…' : account?.passwordSet ? 'UPDATE PASSWORD →' : 'SAVE PASSWORD →'}</button></div><div className="passkey-optional"><small>OPTIONAL PASSKEY</small><span>{account?.passkeyCount ? `${account.passkeyCount} connected` : 'Face ID, Touch ID or Windows Hello can be added later.'}</span><button onClick={() => void secure()}>{account?.passkeyCount ? '＋ ADD ANOTHER PASSKEY' : 'ADD A PASSKEY'}</button></div><div className="account-devices"><small>SIGNED-IN DEVICES</small>{devices.map((device) => <div key={device.id}><span><b>{device.label}</b><small>{device.current ? 'THIS DEVICE' : `LAST SEEN ${new Date(device.lastSeenAt).toLocaleDateString()}`}</small></span>{!device.current && <button onClick={() => void revoke(device)}>SIGN OUT</button>}</div>)}</div><button className="recovery-link" onClick={() => setRecoveryOpen(true)}>BACKUP / RESTORE / RECOVERY →</button><button className={`account-signout ${signOutArmed ? 'armed' : ''}`} onClick={() => void signOut()}>{signOutArmed ? 'CONFIRM: SIGN OUT THIS DEVICE' : 'SIGN OUT / SWITCH ACCOUNT'}</button>{signOutArmed && <button className="account-signout-cancel" onClick={() => { setSignOutArmed(false); setMessage('Sign-out cancelled.'); }}>NEVER MIND</button>}</section>
     </div>
     <footer className="account-footer"><span>MEMBER SINCE {new Date(progression.firstSeenAt).toLocaleDateString()}</span><b>YOUR DATA. YOUR ART. YOUR BEAUTIFUL MESS.</b></footer>{message && <div className="account-message" role="status">{message}</div>}<AnimatePresence>{recoveryOpen && <VaultRecovery close={() => setRecoveryOpen(false)}/>}</AnimatePresence>
   </motion.main>;
@@ -902,10 +918,10 @@ function VaultRecovery({ close }: { close: () => void }) {
       <small>PRIVATE PLAYER IDENTITY</small>
       <h2 id="recovery-title">YOUR VAULT<br/>RECOVERY KEY.</h2>
       <p>Your artwork, rewards, Battle Pass and wallet binding are attached to this account. A passkey is the easiest safe way to bring it to another device.</p>
-      <section className={`passkey-security ${account?.secured ? 'is-secured' : ''}`}>
-        <b>{account?.secured ? '✓ ACCOUNT SECURED' : 'SECURE THIS ACCOUNT'}</b>
-        <p>{account?.secured ? `${account.passkeyCount ?? 1} passkey${(account.passkeyCount ?? 1) === 1 ? '' : 's'} connected. Your private recovery key still works as an emergency backup.` : 'Use Face ID, Touch ID, Windows Hello or your phone. No password and no wallet pop-up.'}</p>
-        <button disabled={securing} onClick={() => void secure()}>{securing ? 'ASKING YOUR DEVICE…' : account?.secured ? '＋ ADD ANOTHER PASSKEY' : 'ADD A PASSKEY →'}</button>
+      <section className={`passkey-security ${(account?.passkeyCount ?? 0) > 0 ? 'is-secured' : ''}`}>
+        <b>{(account?.passkeyCount ?? 0) > 0 ? '✓ PASSKEY ADDED' : account?.passwordSet ? 'PASSWORD PROTECTED' : 'SECURE THIS ACCOUNT'}</b>
+        <p>{(account?.passkeyCount ?? 0) > 0 ? `${account?.passkeyCount} passkey${account?.passkeyCount === 1 ? '' : 's'} connected. Your password and private recovery key remain available.` : account?.passwordSet ? 'Your password works across devices. A passkey is an optional faster sign-in.' : 'Create a password in My Account. You can optionally add Face ID, Touch ID or Windows Hello too.'}</p>
+        <button disabled={securing} onClick={() => void secure()}>{securing ? 'ASKING YOUR DEVICE…' : (account?.passkeyCount ?? 0) > 0 ? '＋ ADD ANOTHER PASSKEY' : 'OPTIONAL: ADD A PASSKEY →'}</button>
         {devices.length > 0 && <div className="device-sessions"><small>SIGNED-IN DEVICES</small>{devices.map((device) => <div key={device.id}><span><b>{device.label}</b><small>{device.current ? 'THIS DEVICE' : `SEEN ${new Date(device.lastSeenAt).toLocaleDateString()}`}</small></span>{!device.current && <button onClick={() => void revokeDevice(device)}>SIGN OUT</button>}</div>)}</div>}
       </section>
       <section className="recovery-backup">
