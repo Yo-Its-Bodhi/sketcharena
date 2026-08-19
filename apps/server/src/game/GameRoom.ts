@@ -52,6 +52,7 @@ export class GameRoom {
   readonly players = new Map<string, PlayerRecord>();
   readonly rounds: RoundResult[] = [];
   readonly keptRoundIds = new Set<string>();
+  readonly feedHistory: FeedItem[] = [];
   phase: RoomPhase = 'lobby';
   hostId: string | null = null;
   drawerId: string | null = null;
@@ -65,6 +66,8 @@ export class GameRoom {
   currentRoundId = '';
   correct = new Map<string, { playerName: string; points: number; elapsedMs: number }>();
   funnyGuesses: FeedItem[] = [];
+  private readonly usedPrompts = new Set<string>();
+  private readonly guessReactions = new Map<string, Map<string, string>>();
   private drawerOrder: string[] = [];
   private drawerTurns = new Map<string, number>();
   private kickedSessions = new Set<string>();
@@ -129,7 +132,7 @@ export class GameRoom {
     };
     this.players.set(player.id, player);
     this.hostId ??= player.id;
-    this.emit('feed', this.system(`${name} entered the arena`));
+    this.publishFeed(this.system(`${name} entered the arena`));
     this.emitState();
     return this.playerView(player);
   }
@@ -143,7 +146,7 @@ export class GameRoom {
     this.drawerTurns.delete(player.id);
     this.correct.delete(player.id);
     if (this.hostId === player.id) this.hostId = this.players.keys().next().value ?? null;
-    this.emit('feed', this.system(departureMessage ?? `${player.name} left the arena`));
+    this.publishFeed(this.system(departureMessage ?? `${player.name} left the arena`));
 
     if (wasDrawer && this.phase === 'drawing') this.finishRound('drawer-left');
     else if (this.phase !== 'lobby' && this.phase !== 'reveal' && this.connectedPlayerCount() < GAME.minPlayers) this.resetToLobby('Waiting for more players');
@@ -163,7 +166,7 @@ export class GameRoom {
     player.socketId = null;
     player.connected = false;
     player.disconnectAt = this.clock();
-    this.emit('feed', this.system(`${player.name} lost connection — holding their seat`));
+    this.publishFeed(this.system(`${player.name} lost connection — holding their seat`));
     if (this.phase === 'drawing' && (player.id === this.drawerId || this.connectedPlayerCount() < GAME.minPlayers)) this.pauseDrawing();
     else this.emitState();
   }
@@ -184,7 +187,7 @@ export class GameRoom {
     const player = this.bySession(sessionId);
     if (!player || !player.connected) throw new Error('Player not found');
     player.ready = ready;
-    this.emit('feed', this.system(`${player.name} is ${ready ? 'ready to make a mess' : 'not ready yet'}`));
+    this.publishFeed(this.system(`${player.name} is ${ready ? 'ready to make a mess' : 'not ready yet'}`));
     this.emitState();
   }
 
@@ -291,7 +294,15 @@ export class GameRoom {
     this.drawerTurns.set(drawer.id, (this.drawerTurns.get(drawer.id) ?? 0) + 1);
     this.phase = 'drawing';
     this.drawerId = drawer.id;
-    this.currentPrompt = randomWord(this.category, this.random);
+    const previousPrompt = this.currentPrompt;
+    let nextPrompt = randomWord(this.category, this.random, this.usedPrompts);
+    if (this.usedPrompts.has(nextPrompt)) {
+      this.usedPrompts.clear();
+      if (previousPrompt) this.usedPrompts.add(previousPrompt);
+      nextPrompt = randomWord(this.category, this.random, this.usedPrompts);
+    }
+    this.currentPrompt = nextPrompt;
+    this.usedPrompts.add(this.currentPrompt);
     this.currentRoundId = randomUUID();
     this.startedAt = this.clock();
     this.deadline = this.startedAt + this.roundMs;
@@ -299,6 +310,7 @@ export class GameRoom {
     this.strokes = [];
     this.correct.clear();
     this.funnyGuesses = [];
+    this.guessReactions.clear();
     for (const player of this.players.values()) player.roundScore = 0;
     this.emit('brief', drawer.socketId, { prompt: this.currentPrompt, round: this.round, totalRounds: this.totalRounds });
     this.emitState();
@@ -327,7 +339,7 @@ export class GameRoom {
       this.correct.set(player.id, { playerName: player.name, points, elapsedMs });
       const drawer = this.drawerId ? this.players.get(this.drawerId) : undefined;
       if (drawer) { drawer.score += 100; drawer.roundScore += 100; }
-      this.emit('feed', { id: randomUUID(), kind: 'correct', playerId: player.id, playerName: player.name, text: 'got it!', at: this.clock(), points });
+      this.publishFeed({ id: randomUUID(), kind: 'correct', playerId: player.id, playerName: player.name, text: 'got it!', at: this.clock(), points });
       this.emitState();
       if (this.everyGuesserFinished()) this.finishRound('all-guessed');
       return { correct: true, close: false };
@@ -338,7 +350,7 @@ export class GameRoom {
     const item: FeedItem = { id: randomUUID(), kind: close ? 'close' : 'guess', playerId: player.id, playerName: player.name, text: text.trim().slice(0, 80), at: this.clock() };
     this.funnyGuesses.push(item);
     this.funnyGuesses = this.funnyGuesses.slice(-12);
-    this.emit('feed', item);
+    this.publishFeed(item);
     return { correct: false, close };
   }
 
@@ -348,13 +360,26 @@ export class GameRoom {
     if (this.phase === 'drawing' && player.id === this.drawerId) {
       throw new Error('Chat is locked while you draw—keep the prompt secret');
     }
-    this.emit('feed', { id: randomUUID(), kind: 'chat', playerId: player.id, playerName: player.name, text: text.trim().slice(0, 160), at: this.clock() });
+    this.publishFeed({ id: randomUUID(), kind: 'chat', playerId: player.id, playerName: player.name, text: text.trim().slice(0, 160), at: this.clock() });
   }
 
-  react(sessionId: string, emoji: string): void {
+  react(sessionId: string, emoji: string, targetId?: string): void {
     const player = this.bySession(sessionId);
     if (!player) throw new Error('Player not found');
-    this.emit('feed', { id: randomUUID(), kind: 'reaction', playerId: player.id, playerName: player.name, text: emoji, at: this.clock() });
+    if (!targetId) {
+      this.publishFeed({ id: randomUUID(), kind: 'reaction', playerId: player.id, playerName: player.name, text: emoji, at: this.clock() });
+      return;
+    }
+    const target = this.funnyGuesses.find((item) => item.id === targetId);
+    if (!target) throw new Error('That guess is no longer available to react to');
+    const votes = this.guessReactions.get(targetId) ?? new Map<string, string>();
+    votes.set(sessionId, emoji); this.guessReactions.set(targetId, votes);
+    const reactions = [...votes.values()].reduce<Record<string, number>>((counts, value) => { counts[value] = (counts[value] ?? 0) + 1; return counts; }, {});
+    const updated = { ...target, reactions };
+    this.funnyGuesses = this.funnyGuesses.map((item) => item.id === targetId ? updated : item);
+    const historyIndex = this.feedHistory.findIndex((item) => item.id === targetId);
+    if (historyIndex >= 0) this.feedHistory[historyIndex] = updated;
+    this.emit('feed', updated);
   }
 
   addStroke(sessionId: string, stroke: Stroke): void {
@@ -383,6 +408,12 @@ export class GameRoom {
   undo(sessionId: string): void {
     if (this.bySession(sessionId)?.id !== this.drawerId) return;
     this.strokes.pop();
+    this.emitState();
+  }
+
+  moveCanvas(sessionId: string, x: number, y: number): void {
+    if (this.phase !== 'drawing' || this.bySession(sessionId)?.id !== this.drawerId) return;
+    this.strokes = this.strokes.map((stroke) => ({ ...stroke, points: stroke.points.map((point) => ({ ...point, x: Math.max(0, Math.min(1, point.x + x)), y: Math.max(0, Math.min(1, point.y + y)) })) }));
     this.emitState();
   }
 
@@ -418,7 +449,7 @@ export class GameRoom {
       category: this.category, isPrivate: this.isPrivate, matchRounds: GAME.matchRounds,
       roundSeconds: Math.round(this.roundMs / 1000), players: this.sortedPlayers(), hostId: this.hostId,
       drawerId: this.drawerId, round: this.round, totalRounds: this.totalRounds, deadline: this.deadline,
-      hints: [...this.hints], strokes: [...this.strokes], canvasRatio: this.canvasRatio,
+      hints: [...this.hints], strokes: [...this.strokes], canvasRatio: this.canvasRatio, feed: this.feedHistory.map((item) => ({ ...item, reactions: item.reactions ? { ...item.reactions } : undefined })),
     };
   }
 
@@ -452,11 +483,16 @@ export class GameRoom {
   private resetToLobby(message: string): void {
     this.clearTimer();
     this.phase = 'lobby'; this.drawerId = null; this.deadline = null; this.currentPrompt = ''; this.strokes = []; this.pausedRoundRemainingMs = null;
-    this.emit('feed', this.system(message));
+    this.publishFeed(this.system(message));
     this.emitState();
   }
 
   private emitState(): void { this.emit('state', this.view()); }
+  private publishFeed(item: FeedItem): void {
+    this.feedHistory.push(item);
+    if (this.feedHistory.length > 120) this.feedHistory.splice(0, this.feedHistory.length - 120);
+    this.emit('feed', item);
+  }
   private clearTimer(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;

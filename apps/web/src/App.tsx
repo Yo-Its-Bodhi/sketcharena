@@ -72,6 +72,7 @@ export function App() {
         lastPhase.current = value.phase;
       }
       setRoom(value);
+      setFeed(value.feed ?? []);
       if (value.phase !== 'reveal') setReveal(null);
       if (value.phase !== 'drawing') setPrompt('');
       setScreen(value.phase === 'afterparty' ? 'afterparty' : 'arena');
@@ -81,7 +82,9 @@ export function App() {
       else if (value.kind === 'close') gameAudio.play('close');
       else if (value.kind === 'chat' || value.kind === 'guess') gameAudio.play('chat');
       else if (value.kind === 'system' && value.text.includes('entered')) gameAudio.play('join');
-      setFeed((items) => [...items.slice(-79), value]);
+      setFeed((items) => items.some((existing) => existing.id === value.id)
+        ? items.map((existing) => existing.id === value.id ? value : existing)
+        : [...items.slice(-119), value]);
     };
     const mergeStroke = (value: Stroke) => setRoom((valueRoom) => valueRoom ? { ...valueRoom, strokes: [...valueRoom.strokes.filter((stroke) => stroke.id !== value.id), value] } : valueRoom);
     const clear = () => setRoom((valueRoom) => valueRoom ? { ...valueRoom, strokes: [] } : valueRoom);
@@ -169,12 +172,12 @@ export function App() {
   const createRoom = (options: CreateRoomOptions) => socket.emit('room:create', options, (ack) => {
     handleAck(ack);
     if (!ack.ok || !ack.data) return;
-    setInviteCode(ack.data.inviteCode ?? ''); setRoom(ack.data.room); setFeed([]); setSavedRounds([]); setScreen('arena');
+    setInviteCode(ack.data.inviteCode ?? ''); setRoom(ack.data.room); setFeed(ack.data.room.feed ?? []); setSavedRounds([]); setScreen('arena');
   });
   const joinRoom = (payload: { roomId?: string; inviteCode?: string }) => socket.emit('room:join', payload, (ack) => {
     handleAck(ack);
     if (!ack.ok || !ack.data) return;
-    setInviteCode(''); setRoom(ack.data.room); setFeed([]); setSavedRounds([]); setScreen('arena');
+    setInviteCode(''); setRoom(ack.data.room); setFeed(ack.data.room.feed ?? []); setSavedRounds([]); setScreen('arena');
   });
   const openArchive = () => { history.pushState({}, '', '/archive'); setScreen('archive'); };
   const openLeaderboard = () => { history.pushState({}, '', '/leaderboard'); setScreen('leaderboard'); };
@@ -210,9 +213,9 @@ export function App() {
 }
 
 function Landing({ name, setName, enter, passkeyLogin, studio, vault, archive, leaderboard, connected, error }: { name: string; setName: (value: string) => void; enter: (password: string) => void; passkeyLogin: () => void; studio: () => void; vault: () => void; archive: () => void; leaderboard: () => void; connected: boolean; error: string }) {
-  const [recoveryOpen, setRecoveryOpen] = useState(false); const [password, setPassword] = useState('');
+  const [recoveryOpen, setRecoveryOpen] = useState(false); const [howOpen, setHowOpen] = useState(false); const [password, setPassword] = useState('');
   return <motion.main className="landing screen" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, scale: .98 }}>
-    <header className="topbar brand-topbar"><Brand/><MainNav active="play" play={() => document.getElementById('arena-entry')?.scrollIntoView({ behavior: 'smooth', block: 'center' })} studio={studio} vault={vault} archive={archive} leaderboard={leaderboard}/><div className="landing-access"><button onClick={() => document.getElementById('arena-entry')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>ACCOUNT / SIGN IN ↓</button><span className={`connection ${connected ? 'online' : ''}`}><i/>{connected ? 'stage online' : 'warming up'}</span></div></header>
+    <header className="topbar brand-topbar"><Brand/><MainNav active="play" play={() => document.getElementById('arena-entry')?.scrollIntoView({ behavior: 'smooth', block: 'center' })} studio={studio} vault={vault} archive={archive} leaderboard={leaderboard}/><div className="landing-access"><button className="how-trigger" onClick={() => setHowOpen(true)}>HOW TO PLAY ?</button><button onClick={() => document.getElementById('arena-entry')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>ACCOUNT / SIGN IN ↓</button><span className={`connection ${connected ? 'online' : ''}`}><i/>{connected ? 'stage online' : 'warming up'}</span></div></header>
     <section className="hero">
       <div className="hero-doodles" aria-hidden="true"><ChaosFace variant={0}/><ChaosFace variant={1}/><ChaosFace variant={2}/><span className="orbit-line"/><span className="pencil-comet">✎</span></div>
       <motion.div className="hero-kicker" initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }}>LIVE DRAWING. LOUD GUESSING.</motion.div>
@@ -227,8 +230,13 @@ function Landing({ name, setName, enter, passkeyLogin, studio, vault, archive, l
       </div>
       <button className="studio-link" onClick={studio}><span>✦</span><b>SOLO STUDIO</b><small>Take your time. Make something beautiful.</small><i>→</i></button>
     </section>
-      <div className="ticker"><span>30–60 SECOND ROUNDS</span><b>✦</b><span>REAL-TIME CHAOS</span><b>✦</b><span>SHIDO CREATOR EXPORT</span><b>✦</b><span>KEEP THE MOMENT</span></div><AnimatePresence>{recoveryOpen && <VaultRecovery close={() => setRecoveryOpen(false)}/>}</AnimatePresence>
+      <div className="ticker"><span>30–60 SECOND ROUNDS</span><b>✦</b><span>REAL-TIME CHAOS</span><b>✦</b><span>SHIDO CREATOR EXPORT</span><b>✦</b><span>KEEP THE MOMENT</span></div><AnimatePresence>{recoveryOpen && <VaultRecovery close={() => setRecoveryOpen(false)}/>} {howOpen && <HowToPlay close={() => setHowOpen(false)}/>}</AnimatePresence>
   </motion.main>;
+}
+
+function HowToPlay({ close }: { close: () => void }) {
+  const dialogRef = useDialogFocus<HTMLDivElement>(true, close);
+  return <motion.div className="how-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={(event) => event.target === event.currentTarget && close()}><motion.div ref={dialogRef} tabIndex={-1} className="how-sheet" role="dialog" aria-modal="true" aria-labelledby="how-title" initial={{ y: 45, scale: .94, rotate: -1 }} animate={{ y: 0, scale: 1, rotate: 0 }} exit={{ y: 25, opacity: 0 }}><button className="setup-close" onClick={close} aria-label="Close how to play">×</button><header><div className="loot-weirdos" aria-hidden="true"><ChaosFace variant={0}/><ChaosFace variant={1}/><ChaosFace variant={2}/></div><small>NO TALENT REQUIRED · VOLUME ENCOURAGED</small><h2 id="how-title">HOW TO<br/>CAUSE A SCENE.</h2><p>One person draws. Everybody else types increasingly desperate guesses. Then the pencil moves to the next victim.</p></header><section className="how-steps"><article><span>1</span><b>DRAW THE THING.</b><p>You get a secret prompt and a short clock. Use brushes, colour, fill, erase or move the whole disaster. No letters, numbers or suspiciously accurate spelling.</p></article><article><span>2</span><b>YELL ANSWERS.</b><p>Type guesses and hit Enter. A <em>yellow answer</em> means painfully close. A <strong>green answer</strong> means correct—and the room sees that you got it without exposing the word.</p></article><article><span>3</span><b>GET PAID IN GLORY.</b><p>Guess faster for more points. Build a correct-answer streak for a bonus. Artists earn 100 points for every person who solves their drawing, so honest drawings beat impossible scribbles.</p></article><article><span>4</span><b>SURVIVE EIGHT ROUNDS.</b><p>Every match contains eight drawings, regardless of room size. Final ties break by correct guesses, then combined solve time. If nobody can separate you, share the crown like adults.</p></article></section><section className="how-score"><div><small>FAST CORRECT GUESS</small><b>100–500</b><span>More time left = more points</span></div><div><small>STREAK BONUS</small><b>UP TO +100</b><span>Wrong guesses reset it</span></div><div><small>ARTIST REWARD</small><b>+100 EACH</b><span>For every player who gets it</span></div></section><div className="how-chaos"><b>IMPORTANT SCIENCE:</b><span>React to ridiculous answers. The crowd favourite gets dragged onto the round report for permanent public embarrassment.</span></div><button className="primary how-ready" onClick={close}>I UNDERSTAND NOTHING — LET’S PLAY →</button></motion.div></motion.div>;
 }
 
 function Lobby({ name, rooms, progression, refreshProgression, acknowledgeReward, equipItem, redeemPromotion, create, join, joinCode, studio, vault, archive, leaderboard, account }: { name: string; rooms: RoomSummary[]; progression: PlayerProgress | null; refreshProgression: () => Promise<void>; acknowledgeReward: (rewardId: string) => void; equipItem: (itemId: string) => Promise<void>; redeemPromotion: (code: string) => Promise<string>; create: (options: CreateRoomOptions) => void; join: (id: string) => void; joinCode: (code: string) => void; studio: () => void; vault: () => void; archive: () => void; leaderboard: () => void; account: () => void }) {
@@ -576,9 +584,13 @@ function Arena({ connected, room, prompt, feed, inviteCode, reveal, setReveal, s
   const [volume, setVolume] = useState(gameAudio.getVolume());
   const [mobilePanel, setMobilePanel] = useState<'none' | 'players' | 'chat'>('none');
   const [reporting, setReporting] = useState<PlayerView | null>(null);
+  const [sending, setSending] = useState(false);
+  const feedRef = useRef<HTMLDivElement>(null);
+  const guessInputRef = useRef<HTMLInputElement>(null);
   const lastTick = useRef<number | null>(null);
   useEffect(() => { const frame = requestAnimationFrame(() => setDisplayStrokes(room.strokes)); return () => cancelAnimationFrame(frame); }, [room.strokes]);
   useEffect(() => { if (!reveal) return; const frame = requestAnimationFrame(() => setMobilePanel('none')); return () => cancelAnimationFrame(frame); }, [reveal]);
+  useEffect(() => { const frame = requestAnimationFrame(() => feedRef.current?.scrollTo({ top: feedRef.current.scrollHeight, behavior: 'smooth' })); return () => cancelAnimationFrame(frame); }, [feed, mobilePanel]);
   const seconds = useCountdown(room.deadline);
   useEffect(() => {
     if (room.phase === 'drawing' && seconds <= 10 && seconds > 0 && seconds !== lastTick.current) gameAudio.play('tick');
@@ -587,9 +599,15 @@ function Arena({ connected, room, prompt, feed, inviteCode, reveal, setReveal, s
   const drawerChatLocked = room.phase === 'drawing' && isDrawer;
   const submit = () => {
     if (!connected) return reportError('Reconnecting—your message has not been sent yet');
-    if (!text.trim() || drawerChatLocked) return;
+    if (!text.trim() || drawerChatLocked || sending) return;
     const event = room.phase === 'drawing' && !me?.hasGuessed ? 'guess:submit' : 'chat:send';
-    socket.emit(event, { text }, (ack) => { if (!ack.ok) return reportError(ack.error ?? 'Could not send that'); setText(''); });
+    const sentText = text.trim(); setSending(true);
+    socket.emit(event, { text: sentText }, (ack) => {
+      setSending(false);
+      if (!ack.ok) { reportError(ack.error ?? 'Could not send that'); requestAnimationFrame(() => guessInputRef.current?.focus()); return; }
+      setText((current) => current.trim() === sentText ? '' : current);
+      requestAnimationFrame(() => guessInputRef.current?.focus());
+    });
   };
   const stroke = (value: Stroke) => {
     setDisplayStrokes((items) => [...items.filter((item) => item.id !== value.id), value]);
@@ -607,7 +625,11 @@ function Arena({ connected, room, prompt, feed, inviteCode, reveal, setReveal, s
     if (!reporting) return reject(new Error('Choose a player to report'));
     socket.emit('player:report', { playerId: reporting.id, category, detail }, (ack) => ack.ok && ack.data ? resolve(`Report ${ack.data.reportId.slice(0, 8)} received. Staff can now review it.`) : reject(new Error(ack.error ?? 'Could not send the report')));
   });
-  const quickReact = (emoji: string) => socket.emit('reaction:send', { emoji }, (ack) => !ack.ok && reportError(ack.error ?? 'Could not react'));
+  const quickReact = (emoji: string, targetId?: string) => socket.emit('reaction:send', { emoji, targetId }, (ack) => !ack.ok && reportError(ack.error ?? 'Could not react'));
+  const moveDrawing = (x: number, y: number) => {
+    setDisplayStrokes((items) => items.map((item) => ({ ...item, points: item.points.map((point) => ({ ...point, x: Math.max(0, Math.min(1, point.x + x)), y: Math.max(0, Math.min(1, point.y + y)) })) })));
+    socket.emit('draw:move', { x, y });
+  };
 
   const tension = room.phase !== 'drawing' ? 'calm' : seconds <= 3 ? 'critical' : seconds <= 10 ? 'panic' : seconds <= 15 ? 'urgent' : seconds <= 30 ? 'pressure' : 'calm';
   return <motion.main className={`arena arena-screen screen tension-${tension}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -619,12 +641,12 @@ function Arena({ connected, room, prompt, feed, inviteCode, reveal, setReveal, s
         <div className="stage-hardware" aria-hidden="true"><i/><i/><i/><i/></div>
           {room.phase === 'lobby' ? <div className="waiting-stage"><div className="waiting-mascots" aria-hidden="true"><ChaosFace variant={0}/><ChaosFace variant={1}/><ChaosFace variant={2}/></div><span>THE CALM BEFORE THE CHAOS</span><h2>{room.playerCount < 2 ? 'Round up the weirdos.' : 'Everybody’s here.'}</h2><p>{room.playerCount < 2 ? 'You need at least one willing victim before the show can start.' : me?.isHost ? 'You control the big red button.' : `Waiting for ${room.players.find((p) => p.isHost)?.name} to start.`}</p><div className="room-rules"><span>{room.roundSeconds}s per drawing</span><span>{room.matchRounds} drawings total</span><span>fair rotating turns</span></div>{inviteCode && <button className="invite-card" onClick={() => { void navigator.clipboard.writeText(`${location.origin}${location.pathname}?join=${inviteCode}`); setCopied(true); setTimeout(() => setCopied(false), 1500); }}><small>PRIVATE INVITE LINK</small><b>{inviteCode}</b><span>{copied ? 'LINK COPIED!' : 'CLICK TO COPY & SHARE'}</span></button>}{!inviteCode && room.playerCount < 2 && <div className="waiting-tip"><b>TIP</b> Open this page on another device or invite a friend to join your public room.</div>}{me && !me.isHost && <button className={`ready-button ${me.ready ? 'is-ready' : ''}`} onClick={() => socket.emit('player:ready', { ready: !me.ready }, (ack) => !ack.ok && reportError(ack.error ?? 'Could not update ready state'))}>{me.ready ? '✓ READY TO PANIC' : 'I’M READY'}</button>}{me?.isHost && <button className="start-button" disabled={room.playerCount < 2} onClick={() => socket.emit('game:start', (ack) => !ack.ok && reportError(ack.error ?? 'Could not start the match'))}>START THE SHOW</button>}</div> : <>
           <div className="prompt-strip">{isDrawer ? <><small>YOUR PROMPT</small><b>{prompt || 'Stand by…'}</b></> : <><small>{drawer?.name ?? 'Someone'} IS DRAWING</small><b className="hint">{room.hints.join('')}</b></>}</div>
-          <Canvas strokes={displayStrokes} active={connected && room.phase === 'drawing' && isDrawer} transportPointLimit={DRAW_LIMITS.maxPointsPerStroke} onPreview={(value) => socket.emit('draw:preview', value)} onStroke={stroke} onClear={() => { if (!connected) return; setDisplayStrokes([]); socket.emit('draw:clear'); }} onUndo={() => { if (!connected) return; setDisplayStrokes((items) => items.slice(0, -1)); socket.emit('draw:undo'); }}/>
+          <Canvas arenaTools strokes={displayStrokes} active={connected && room.phase === 'drawing' && isDrawer} transportPointLimit={DRAW_LIMITS.maxPointsPerStroke} onPreview={(value) => socket.emit('draw:preview', value)} onStroke={stroke} onLayerTranslate={moveDrawing} onClear={() => { if (!connected) return; setDisplayStrokes([]); socket.emit('draw:clear'); }} onUndo={() => { if (!connected) return; setDisplayStrokes((items) => items.slice(0, -1)); socket.emit('draw:undo'); }}/>
           {room.phase === 'countdown' && <div className="countdown-cover"><small>NEXT ROUND</small><strong>{seconds || 'GO'}</strong><span>{me?.isDrawer ? 'YOUR HANDS ARE ABOUT TO SWEAT' : 'GET YOUR BAD GUESSES READY'}</span></div>}
           {room.phase === 'paused' && <div className="countdown-cover"><small>SEAT HELD</small><strong>HOLD</strong><span>Somebody dropped. We’ll resume the moment they’re back.</span></div>}
         </>}
       </section>
-      <aside className={`guess-panel ${mobilePanel === 'chat' ? 'mobile-open' : ''}`}><div className="guess-title"><span>LIVE CHAOS</span><i>{feed.length}</i><button onClick={() => setMobilePanel('none')} aria-label="Close live chaos">×</button></div><div className="feed" aria-live="polite">{feed.slice(-30).map((item) => <motion.div className={`feed-item ${item.kind}`} initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} key={item.id}>{item.playerName && <b>{item.playerName}</b>}<span>{item.text}</span>{item.points && <strong>+{item.points}</strong>}</motion.div>)}</div><div className="reactions">{['😂','🔥','💀','👏','🤯','❤️'].map((emoji) => <button disabled={!connected} aria-label={`React ${emoji}`} onClick={() => socket.emit('reaction:send', { emoji }, (ack) => !ack.ok && reportError(ack.error ?? 'Could not react'))} key={emoji}>{emoji}</button>)}</div><div className="guess-box"><input aria-label={!connected ? 'Reconnecting to the arena' : drawerChatLocked ? 'Chat locked while drawing' : 'Guess or chat'} value={text} disabled={!connected || drawerChatLocked} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && submit()} placeholder={!connected ? 'RECONNECTING…' : drawerChatLocked ? 'CHAT LOCKED WHILE YOU DRAW' : room.phase === 'drawing' && !me?.hasGuessed ? 'SHOUT YOUR GUESS…' : 'Say something…'}/><button aria-label="Send" disabled={!connected || drawerChatLocked} onClick={submit}>↑</button></div></aside>
+      <aside className={`guess-panel ${mobilePanel === 'chat' ? 'mobile-open' : ''}`}><div className="guess-title"><span>LIVE CHAOS</span><i>{feed.length}</i><button onClick={() => setMobilePanel('none')} aria-label="Close live chaos">×</button></div><div ref={feedRef} className="feed" aria-live="polite">{feed.map((item) => <motion.div className={`feed-item ${item.kind}`} initial={{ opacity: 0, x: 18 }} animate={{ opacity: 1, x: 0 }} key={item.id}><div className="feed-copy">{item.playerName && <b>{item.playerName}</b>}<span>{item.text}</span>{item.points && <strong>+{item.points}</strong>}</div>{(item.kind === 'guess' || item.kind === 'close') && <div className="guess-votes"><span>{Object.entries(item.reactions ?? {}).map(([emoji, count]) => <b key={emoji}>{emoji} {count}</b>)}</span><div>{['😂','💀','👏'].map((emoji) => <button type="button" aria-label={`React ${emoji} to ${item.playerName}'s guess`} onClick={() => quickReact(emoji, item.id)} key={emoji}>{emoji}</button>)}</div></div>}</motion.div>)}</div><div className="reactions">{['😂','🔥','💀','👏','🤯','❤️'].map((emoji) => <button disabled={!connected} aria-label={`React ${emoji}`} onClick={() => quickReact(emoji)} key={emoji}>{emoji}</button>)}</div><form className="guess-box" onSubmit={(event) => { event.preventDefault(); submit(); }}><input ref={guessInputRef} aria-label={!connected ? 'Reconnecting to the arena' : drawerChatLocked ? 'Chat locked while drawing' : 'Guess or chat'} value={text} disabled={!connected || drawerChatLocked} enterKeyHint="send" autoComplete="off" onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault(); }} placeholder={!connected ? 'RECONNECTING…' : drawerChatLocked ? 'CHAT LOCKED WHILE YOU DRAW' : room.phase === 'drawing' && !me?.hasGuessed ? 'SHOUT YOUR GUESS…' : 'Say something…'}/><button type="submit" aria-label="Send" disabled={!connected || drawerChatLocked || sending || !text.trim()}>{sending ? '…' : '↑'}</button></form></aside>
     </div>
     {mobilePanel !== 'none' && <button className="mobile-scrim" onClick={() => setMobilePanel('none')} aria-label="Close game panel"/>}
     <nav className="mobile-game-dock" aria-label="Game panels"><button className={mobilePanel === 'players' ? 'active' : ''} onClick={() => setMobilePanel((value) => value === 'players' ? 'none' : 'players')}><span>♟</span><b>PLAYERS</b><i>{room.playerCount}</i></button><button className={mobilePanel === 'none' ? 'active canvas-tab' : 'canvas-tab'} onClick={() => setMobilePanel('none')}><span>✎</span><b>CANVAS</b></button><button className={mobilePanel === 'chat' ? 'active' : ''} onClick={() => setMobilePanel((value) => value === 'chat' ? 'none' : 'chat')}><span>!</span><b>CHAOS</b>{feed.length > 0 && <i>{Math.min(feed.length, 99)}</i>}</button></nav>
@@ -689,6 +711,7 @@ function Reveal({ result, mine, saved, keepRound, reportError, close }: { result
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const wrongGuesses = result.funniestCandidates.filter((item) => item.kind === 'guess' || item.kind === 'close').slice(-3).reverse();
+  const crowdFavorite = [...result.funniestCandidates].filter((item) => reactionTotal(item) > 0).sort((a, b) => reactionTotal(b) - reactionTotal(a))[0];
   const react = (emoji: string) => socket.emit('reaction:send', { emoji }, (ack) => !ack.ok && reportError(ack.error ?? 'Could not react'));
   const save = async () => {
     if (saved || saving) return;
@@ -702,7 +725,7 @@ function Reveal({ result, mine, saved, keepRound, reportError, close }: { result
     }
     finally { setSaving(false); }
   };
-  return <motion.div className="reveal-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><div className="reveal-rays" aria-hidden="true"/><motion.div ref={dialogRef} tabIndex={-1} className="reveal-card reveal-card-v2" role="dialog" aria-modal="true" aria-labelledby="round-answer" initial={{ scale: .65, rotate: -3, y: 60 }} animate={{ scale: 1, rotate: 0, y: 0 }} transition={{ type: 'spring', damping: 15 }}><div className="reveal-copy"><span>THE WORD WAS</span><h2 className={result.prompt.length > 13 ? 'long-answer' : ''} id="round-answer">{result.prompt}</h2><p>Drawn under pressure by <b>{result.drawerName}</b></p><div className="round-awards"><div><small>FASTEST BRAIN</small><strong>{fastest?.playerName ?? 'Nobody'}</strong><em>{fastest ? `${(fastest.elapsedMs / 1000).toFixed(1)} seconds` : 'The drawing won'}</em></div><div><small>SUCCESS RATE</small><strong>{result.correct.length} got it</strong><em>{result.reason === 'all-guessed' ? 'Clean sweep' : 'Before the buzzer'}</em></div></div>{result.correct.length > 0 && <div className="round-solvers"><small>THEY CRACKED IT</small>{result.correct.map((solver, index) => <span key={solver.playerId}><i>{index + 1}</i><b>{solver.playerName}</b><strong>+{solver.points}</strong></span>)}</div>}{wrongGuesses.length > 0 && <div className="wrong-guess-reel"><small>THE ROOM ALSO SAID…</small>{wrongGuesses.map((guess) => <span key={guess.id}><b>{guess.playerName}</b> “{guess.text}”{guess.kind === 'close' && <em>SO CLOSE</em>}</span>)}</div>}<div className="reveal-reactions" aria-label="React to this drawing">{(['😂','🔥','💀','👏','🤯','❤️'] as const).map((emoji) => <button type="button" aria-label={`React ${emoji}`} onClick={() => react(emoji)} key={emoji}>{emoji}</button>)}</div>{mine && <><button type="button" className="keep-button" disabled={saved || saving} aria-busy={saving} onClick={() => void save()}>{saving ? 'SAVING THE DISASTER…' : saved ? '✓ SAVED TO YOUR VAULT' : '★ KEEP THIS DISASTER'}</button>{saveError && <div className="keep-error" role="alert">NOT SAVED: {saveError}</div>}{saved && <div className="keep-confirmation" role="status">Safe. It will be waiting in your Vault after the match.</div>}</>}<button type="button" className="text-button" onClick={close}>WATCH THE CHAOS <small>NEXT ROUND SOON</small></button></div><div className="reveal-art"><span className="tape tape-a"/><span className="tape tape-b"/><Canvas strokes={result.strokes} active={false}/><small>AN ORIGINAL PANIC MASTERPIECE</small></div></motion.div></motion.div>;
+  return <motion.div className="reveal-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><div className="reveal-rays" aria-hidden="true"/><motion.div ref={dialogRef} tabIndex={-1} className="reveal-card reveal-card-v2" role="dialog" aria-modal="true" aria-labelledby="round-answer" initial={{ scale: .65, rotate: -3, y: 60 }} animate={{ scale: 1, rotate: 0, y: 0 }} transition={{ type: 'spring', damping: 15 }}><div className="reveal-copy"><span>THE WORD WAS</span><h2 className={result.prompt.length > 13 ? 'long-answer' : ''} id="round-answer">{result.prompt}</h2><p>Drawn under pressure by <b>{result.drawerName}</b></p><div className="round-awards"><div><small>FASTEST BRAIN</small><strong>{fastest?.playerName ?? 'Nobody'}</strong><em>{fastest ? `${(fastest.elapsedMs / 1000).toFixed(1)} seconds` : 'The drawing won'}</em></div><div><small>SUCCESS RATE</small><strong>{result.correct.length} got it</strong><em>{result.reason === 'all-guessed' ? 'Clean sweep' : 'Before the buzzer'}</em></div></div>{result.correct.length > 0 && <div className="round-solvers"><small>THEY CRACKED IT</small>{result.correct.map((solver, index) => <span key={solver.playerId}><i>{index + 1}</i><b>{solver.playerName}<em>{(solver.elapsedMs / 1000).toFixed(1)}s</em></b><strong>+{solver.points}</strong></span>)}</div>}{crowdFavorite && <div className="crowd-favorite"><small>THE CROWD LOST IT</small><b>{crowdFavorite.playerName}: “{crowdFavorite.text}”</b><span>{Object.entries(crowdFavorite.reactions ?? {}).map(([emoji, count]) => `${emoji} ${count}`).join(' · ')}</span></div>}{wrongGuesses.length > 0 && <div className="wrong-guess-reel"><small>THE ROOM ALSO SAID…</small>{wrongGuesses.filter((guess) => guess.id !== crowdFavorite?.id).map((guess) => <span key={guess.id}><b>{guess.playerName}</b> “{guess.text}”{guess.kind === 'close' && <em>SO CLOSE</em>}</span>)}</div>}<div className="reveal-reactions" aria-label="React to this drawing">{(['😂','🔥','💀','👏','🤯','❤️'] as const).map((emoji) => <button type="button" aria-label={`React ${emoji}`} onClick={() => react(emoji)} key={emoji}>{emoji}</button>)}</div>{mine && <><button type="button" className="keep-button" disabled={saved || saving} aria-busy={saving} onClick={() => void save()}>{saving ? 'SAVING THE DISASTER…' : saved ? '✓ SAVED TO YOUR VAULT' : '★ KEEP THIS DISASTER'}</button>{saveError && <div className="keep-error" role="alert">NOT SAVED: {saveError}</div>}{saved && <div className="keep-confirmation" role="status">Safe. It will be waiting in your Vault after the match.</div>}</>}<button type="button" className="text-button" onClick={close}>WATCH THE CHAOS <small>NEXT ROUND SOON</small></button></div><div className="reveal-art"><span className="tape tape-a"/><span className="tape tape-b"/><Canvas strokes={result.strokes} active={false}/><small>AN ORIGINAL PANIC MASTERPIECE</small></div></motion.div></motion.div>;
 }
 
 function Afterparty({ match, savedRounds, keepRound, reportError, replay, vault, home }: { match: MatchResult; savedRounds: string[]; keepRound: (round: RoundResult) => Promise<ArtworkDocument>; reportError: (message: string) => void; replay: () => void; vault: () => void; home: () => void }) {
@@ -710,7 +733,8 @@ function Afterparty({ match, savedRounds, keepRound, reportError, replay, vault,
   const [selectedRound, setSelectedRound] = useState<RoundResult | null>(null);
   const fastest = match.rounds.flatMap((round) => round.correct.map((guess) => ({ ...guess, prompt: round.prompt }))).sort((a, b) => a.elapsedMs - b.elapsedMs)[0];
   const hardest = [...match.rounds].sort((a, b) => a.correct.length - b.correct.length)[0];
-  const wildGuess = match.rounds.flatMap((round) => round.funniestCandidates).filter((item) => item.kind === 'guess').at(-1);
+  const wildGuesses = match.rounds.flatMap((round) => round.funniestCandidates).filter((item) => item.kind === 'guess' || item.kind === 'close');
+  const wildGuess = [...wildGuesses].sort((a, b) => reactionTotal(b) - reactionTotal(a))[0] ?? wildGuesses.at(-1);
   const championNames = match.winners.length ? match.winners.map((player) => player.name).join(' + ') : 'THE CHAOS';
   const championIds = new Set(match.winners.map((player) => player.id));
   const keep = (round: RoundResult, after?: () => void) => { void keepRound(round).then(() => after?.()).catch((error) => reportError(error instanceof Error ? error.message : 'Could not save that masterpiece')); };
@@ -1112,6 +1136,7 @@ function Avatar({ seed, item, frame }: { seed: number; item?: string; frame?: st
 
 function storeEquipped(player: PlayerProgress): void { for (const slot of ['brush','reaction'] as const) { const key = `sketch-equipped-${slot}`; if (player.equipped[slot]) localStorage.setItem(key, player.equipped[slot]!); else localStorage.removeItem(key); } }
 function reactionChoices(): string[] { const equipped = localStorage.getItem('sketch-equipped-reaction'); return ['😂','🔥','💀','👏','🤯','❤️', ...(equipped === 'screaming-pencil-reaction' ? ['✏️'] : []), ...(equipped === 'tiny-fire-reaction' ? ['🧨'] : [])]; }
+function reactionTotal(item: FeedItem): number { return Object.values(item.reactions ?? {}).reduce((total, count) => total + count, 0); }
 
 function ChaosFace({ variant = 0 }: { variant?: number }) {
   const paths = [

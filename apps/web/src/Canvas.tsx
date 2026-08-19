@@ -6,7 +6,7 @@ export type LayerBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'dar
 export interface CanvasLayer { id: string; name: string; strokes: Stroke[]; visible: boolean; opacity: number; locked: boolean; blendMode: LayerBlendMode; }
 export interface CanvasViewport { zoom: number; rotation: number; panX: number; panY: number; }
 interface Props {
-  strokes: Stroke[]; active: boolean; expert?: boolean; layers?: CanvasLayer[]; activeLayerId?: string;
+  strokes: Stroke[]; active: boolean; expert?: boolean; arenaTools?: boolean; layers?: CanvasLayer[]; activeLayerId?: string;
   width?: number; height?: number; onStroke?: (stroke: Stroke) => void; onPreview?: (stroke: Stroke) => void;
   onClear?: () => void; onUndo?: () => void; activeLayerLocked?: boolean; onLayerTranslate?: (x: number, y: number) => void;
   transportPointLimit?: number;
@@ -57,13 +57,13 @@ function loadCustomColors(): string[] {
   catch { return []; }
 }
 
-export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas({ strokes, active, expert = false, layers, activeLayerId, width = 2400, height = 2400, onStroke, onPreview, onClear, onUndo, activeLayerLocked = false, onLayerTranslate, transportPointLimit, viewport = { zoom: 1, rotation: 0, panX: 0, panY: 0 }, onViewportChange, panMode = false, expertPanelCollapsed = false, onToggleExpertPanel }, ref) {
+export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas({ strokes, active, expert = false, arenaTools = false, layers, activeLayerId, width = 2400, height = 2400, onStroke, onPreview, onClear, onUndo, activeLayerLocked = false, onLayerTranslate, transportPointLimit, viewport = { zoom: 1, rotation: 0, panX: 0, panY: 0 }, onViewportChange, panMode = false, expertPanelCollapsed = false, onToggleExpertPanel }, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null); const boardRef = useRef<HTMLDivElement>(null);
   const current = useRef<Stroke | null>(null); const lastPreview = useRef(0); const moveStart = useRef<{ x: number; y: number } | null>(null); const moveEnd = useRef<{ x: number; y: number } | null>(null);
   const spaceHeld = useRef(false); const panDrag = useRef<{ pointerId: number; clientX: number; clientY: number; viewport: CanvasViewport } | null>(null);
   const touches = useRef(new Map<number, { x: number; y: number }>()); const touchGesture = useRef<{ distance: number; angle: number; centerX: number; centerY: number; viewport: CanvasViewport } | null>(null);
   const layerRenderCache = useRef<Map<string, LayerRenderCache>>(new Map()); const previewSurface = useRef<PreviewSurface | null>(null);
-  const equippedBrush = expert ? localStorage.getItem('sketch-equipped-brush') : null; const equippedPreset = equippedBrush ? COSMETIC_BRUSHES[equippedBrush] : undefined;
+  const equippedBrush = expert || arenaTools ? localStorage.getItem('sketch-equipped-brush') : null; const equippedPreset = equippedBrush ? COSMETIC_BRUSHES[equippedBrush] : undefined;
   const [tool, setTool] = useState<CanvasTool>('pencil'); const [brush, setBrush] = useState<BrushStyle>(() => equippedPreset?.brush ?? 'pencil');
   const [color, setColor] = useState(() => equippedPreset?.color ?? '#171514'); const [size, setSize] = useState(6);
   const [opacity, setOpacity] = useState(100); const [smoothing, setSmoothing] = useState(45);
@@ -187,13 +187,14 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas({ strokes,
     const factor = Math.exp(-event.deltaY * .0015); onViewportChange({ ...viewport, zoom: clamp(viewport.zoom * factor, .25, 8) });
   };
 
-  return <div className={`canvas-shell ${active ? 'is-active' : ''} ${expert ? 'has-expert-tools' : ''} ${expertPanelCollapsed ? 'expert-is-collapsed' : ''} ${panMode ? 'viewport-pan-mode' : ''} ${activeLayerLocked ? 'layer-is-locked' : ''}`} onWheel={wheel}>
-    {active && <div className={`tool-rail ${expert ? 'pro-tool-rail' : ''}`} aria-label="Drawing tools">
+  return <div className={`canvas-shell ${active ? 'is-active' : ''} ${expert ? 'has-expert-tools' : ''} ${arenaTools ? 'has-arena-tools' : ''} ${expertPanelCollapsed ? 'expert-is-collapsed' : ''} ${panMode ? 'viewport-pan-mode' : ''} ${activeLayerLocked ? 'layer-is-locked' : ''}`} onWheel={wheel}>
+    {active && <div className={`tool-rail ${expert ? 'pro-tool-rail' : arenaTools ? 'arena-tool-rail' : ''}`} aria-label="Drawing tools">
       <button className={tool === 'pencil' ? 'selected' : ''} onClick={() => setTool('pencil')} title="Brush (B)">✎<small>brush</small></button>
       <button className={tool === 'eraser' ? 'selected' : ''} onClick={() => setTool('eraser')} title="Eraser (E)">⌫<small>eraser</small></button>
-      {expert && <><button className={tool === 'fill' ? 'selected' : ''} onClick={() => setTool('fill')} title="Fill (F)">◒<small>fill</small></button>
+      {(expert || arenaTools) && <><button className={tool === 'fill' ? 'selected' : ''} onClick={() => setTool('fill')} title="Fill (F)">◒<small>fill</small></button>
         <button className={tool === 'eyedropper' ? 'selected' : ''} onClick={() => setTool('eyedropper')} title="Eyedropper (I)">◉<small>sample</small></button>
-        <button className={tool === 'move' ? 'selected' : ''} onClick={() => setTool('move')} title="Move active layer (V)">✥<small>move</small></button><span className="rail-line"/>
+        <button className={tool === 'move' ? 'selected' : ''} onClick={() => setTool('move')} title="Move drawing (V)">✥<small>move</small></button></>}
+      {expert && <><span className="rail-line"/>
         <button className={tool === 'line' ? 'selected' : ''} onClick={() => setTool('line')}>╱<small>line</small></button>
         <button className={tool === 'rectangle' ? 'selected' : ''} onClick={() => setTool('rectangle')}>□<small>rect</small></button>
         <button className={tool === 'ellipse' ? 'selected' : ''} onClick={() => setTool('ellipse')}>○<small>ellipse</small></button>
@@ -215,7 +216,7 @@ export const Canvas = forwardRef<CanvasHandle, Props>(function Canvas({ strokes,
     </aside>}
     {active && expert && expertPanelCollapsed && <button className="expert-panel-tab" onClick={onToggleExpertPanel} aria-label="Open brush controls"><span>✎</span><b>UTENSILS</b></button>}
     <div className={`canvas-board ${showGrid ? 'show-grid' : ''}`} ref={boardRef} style={expert ? { aspectRatio: `${width} / ${height}`, transform: `translate(${viewport.panX}px, ${viewport.panY}px) rotate(${viewport.rotation}deg) scale(${viewport.zoom})` } : undefined}><canvas ref={canvasRef} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} aria-label={active ? 'Drawing canvas' : 'Live drawing'} />{showGrid && <div className="canvas-grid" aria-hidden="true"/>}{symmetry !== 'none' && <div className={`symmetry-guide ${symmetry}`} aria-hidden="true"/>}{activeLayerLocked && <div className="canvas-lock-badge">▣ LAYER LOCKED</div>}{expert && <div className="canvas-dimensions" aria-hidden="true">{width} × {height}</div>}</div>
-    {active && !expert && <div className="canvas-controls"><div className="swatches">{COMMON_COLORS.map((value) => <button aria-label={`Use ${value}`} className={color.toLowerCase() === value ? 'selected' : ''} style={{ background: value }} onClick={() => { setColor(value); setTool('pencil'); }} key={value}/>)}</div><label>Stroke <input type="range" min="2" max="18" value={size} onChange={(event) => setSize(Number(event.target.value))}/><b>{size}</b></label></div>}
+    {active && !expert && <div className={`canvas-controls ${arenaTools ? 'arena-canvas-controls' : ''}`}>{arenaTools && <label className="arena-brush-picker">BRUSH<select value={brush} onChange={(event) => chooseBrush(event.target.value as BrushStyle)}>{BRUSHES.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>}<div className="swatches">{COMMON_COLORS.map((value) => <button aria-label={`Use ${value}`} className={color.toLowerCase() === value ? 'selected' : ''} style={{ background: value }} onClick={() => { setColor(value); setTool('pencil'); }} key={value}/>)}</div>{arenaTools && <input className="arena-color-picker" type="color" value={color} onChange={(event) => { setColor(event.target.value); setTool('pencil'); }} aria-label="Pick drawing color"/>}<label>Stroke <input type="range" min="2" max={arenaTools ? 48 : 18} value={size} onChange={(event) => setSize(Number(event.target.value))}/><b>{size}</b></label></div>}
   </div>;
 });
 

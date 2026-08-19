@@ -64,6 +64,7 @@ export interface RoomView extends RoomSummary {
   hints: string[];
   strokes: Stroke[];
   canvasRatio: CanvasRatio;
+  feed: FeedItem[];
 }
 
 export interface FeedItem {
@@ -74,6 +75,7 @@ export interface FeedItem {
   text: string;
   at: number;
   points?: number;
+  reactions?: Record<string, number>;
 }
 
 export interface RoundResult {
@@ -292,10 +294,11 @@ export interface ClientToServerEvents {
   'game:rematch': (ack: (value: Ack) => void) => void;
   'guess:submit': (payload: { text: string }, ack: (value: Ack) => void) => void;
   'chat:send': (payload: { text: string }, ack: (value: Ack) => void) => void;
-  'reaction:send': (payload: { emoji: string }, ack: (value: Ack) => void) => void;
+  'reaction:send': (payload: { emoji: string; targetId?: string }, ack: (value: Ack) => void) => void;
   'draw:stroke': (stroke: Stroke, ack: (value: Ack) => void) => void;
   'draw:preview': (stroke: Stroke) => void;
   'draw:clear': () => void;
   'draw:undo': () => void;
+  'draw:move': (payload: { x: number; y: number }) => void;
   'round:keep': (payload: { roundId: string }, ack: (value: Ack<ArtworkDocument>) => void) => void;
 }
