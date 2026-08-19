@@ -289,17 +289,17 @@ export class PostgresEcosystemRepository {
       let revoked = 0;
       if (status === 'cancelled' && revokeUnused) {
         const result = await client.query(`with reversible as (
-          select grant.entitlement_id from bodhix_campaign_grants grant
-          join bodhix_entitlements entitlement on entitlement.id=grant.entitlement_id
-          where grant.campaign_id=$1 and grant.status='granted' and entitlement.status='active'
+          select campaign_grant.entitlement_id from bodhix_campaign_grants campaign_grant
+          join bodhix_entitlements entitlement on entitlement.id=campaign_grant.entitlement_id
+          where campaign_grant.campaign_id=$1 and campaign_grant.status='granted' and entitlement.status='active'
             and entitlement.remaining is not distinct from case when entitlement.remaining is null then null else entitlement.quantity end
             and not exists(select 1 from bodhix_reward_claims claim where claim.entitlement_id=entitlement.id)
-          for update of grant,entitlement
+          for update of campaign_grant,entitlement
         ), revoked_entitlements as (
           update bodhix_entitlements entitlement set status='revoked',revoked_at=$2
           where entitlement.id in(select entitlement_id from reversible) returning entitlement.id
-        ) update bodhix_campaign_grants grant set status='revoked'
-          where grant.campaign_id=$1 and grant.entitlement_id in(select id from revoked_entitlements) returning grant.account_id`, [campaignId, new Date(now)]);
+        ) update bodhix_campaign_grants campaign_grant set status='revoked'
+          where campaign_grant.campaign_id=$1 and campaign_grant.entitlement_id in(select id from revoked_entitlements) returning campaign_grant.account_id`, [campaignId, new Date(now)]);
         revoked = result.rowCount ?? 0;
       }
       const result = await client.query('update bodhix_campaigns set status=$2,updated_at=$3 where id=$1 returning *', [campaignId, status, new Date(now)]);
@@ -404,7 +404,7 @@ export class PostgresEcosystemRepository {
       if (!claim.external_reference) throw new Error('The original fulfilment receipt is missing');
       await client.query(`update bodhix_entitlements set remaining=coalesce(remaining,0)+$2,status='active' where id=$1`, [claim.entitlement_id, claim.quantity]);
       const result = await client.query(`update bodhix_reward_claims set status='reversed',reversed_at=$2,handled_by=$3,
-        metadata=metadata||jsonb_build_object('reversalReference',$4,'originalExternalReference',external_reference)
+        metadata=metadata||jsonb_build_object('reversalReference',$4::text,'originalExternalReference',external_reference)
         where id=$1 returning *`, [claimId, new Date(now), actor, reversalReference]);
       await client.query(`insert into bodhix_admin_audit(id,principal,action,target_type,target_id,idempotency_key,before_state,after_state,created_at)
         values($1,$2,'claim.reverse','claim',$3,$4,$5,$6,$7)`, [randomUUID(), actor, claimId, `claim.reverse:${claimId}`, JSON.stringify(claim), JSON.stringify(result.rows[0]), new Date(now)]);
