@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import type { ArtworkDocument, ArtworkOrigin, ArtworkStatus, CanvasRatio, PanicArchiveItem, Stroke } from '@sketch-arena/protocol';
 
 export function toPanicArchiveItem(record: ArtworkDocument): PanicArchiveItem {
-  if (record.status !== 'minted' || record.mint?.status !== 'confirmed' || !record.mint.tokenId || !record.mint.contractAddress || !record.mint.transactionHash || !record.mint.tokenURI) throw new Error('Artwork is not a confirmed Panic Archive mint');
+  if (record.mint?.status !== 'confirmed' || !record.mint.tokenId || !record.mint.contractAddress || !record.mint.transactionHash || !record.mint.tokenURI) throw new Error('Artwork is not a confirmed Panic Archive mint');
   return { id: record.id, title: record.title, description: record.description, origin: record.origin, canvasRatio: record.canvasRatio, width: record.width, height: record.height, strokes: record.strokes, previewUrl: record.previewUrl, createdAt: record.createdAt, mintedAt: record.updatedAt, seasonId: 0, seasonName: 'The First Mess', tokenId: record.mint.tokenId, contractAddress: record.mint.contractAddress, transactionHash: record.mint.transactionHash, tokenURI: record.mint.tokenURI, marketplaceUrl: record.mint.marketplaceUrl };
 }
 
@@ -45,6 +45,7 @@ export class MemoryArtworkRepository implements ArtworkRepository {
     if (replay) return replay;
     const previous = input.id ? this.records.get(input.id) : undefined;
     if (previous && previous.ownerSessionId !== input.ownerSessionId) throw new Error('Artwork owner mismatch');
+    if (previous && isConfirmedMint(previous)) return previous;
     const document: ArtworkDocument = {
       id: previous?.id ?? input.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin,
       status: input.status ?? previous?.status ?? 'draft', title: input.title.trim().slice(0, 80),
@@ -62,7 +63,7 @@ export class MemoryArtworkRepository implements ArtworkRepository {
   }
   async listMinted(limit = 100, contractAddress?: string): Promise<ArtworkDocument[]> {
     const activeContract = contractAddress?.toLowerCase();
-    return [...this.records.values()].filter((record) => record.status === 'minted' && record.mint?.status === 'confirmed' && record.mint.tokenId && record.mint.contractAddress && (!activeContract || record.mint.contractAddress.toLowerCase() === activeContract) && record.mint.transactionHash && record.mint.tokenURI).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, Math.max(1, Math.min(500, limit)));
+    return [...this.records.values()].filter((record) => isConfirmedMint(record) && record.mint?.contractAddress && (!activeContract || record.mint.contractAddress.toLowerCase() === activeContract)).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, Math.max(1, Math.min(500, limit)));
   }
   async deleteOwned(id: string, ownerSessionId: string): Promise<boolean> {
     const record = this.records.get(id); if (!record || record.ownerSessionId !== ownerSessionId) return false;
@@ -89,6 +90,7 @@ export class FileArtworkRepository implements ArtworkRepository {
     if (replay) return replay;
     const previous = input.id ? records.get(input.id) : undefined;
     if (previous && previous.ownerSessionId !== input.ownerSessionId) throw new Error('Artwork owner mismatch');
+    if (previous && isConfirmedMint(previous)) return previous;
     const document: ArtworkDocument = {
       id: previous?.id ?? input.id ?? randomUUID(), ownerSessionId: input.ownerSessionId, origin: input.origin,
       status: input.status ?? previous?.status ?? 'draft', title: input.title.trim().slice(0, 80),
@@ -104,7 +106,7 @@ export class FileArtworkRepository implements ArtworkRepository {
   }
   async listMinted(limit = 100, contractAddress?: string): Promise<ArtworkDocument[]> {
     const activeContract = contractAddress?.toLowerCase();
-    return [...(await this.load()).values()].filter((record) => record.status === 'minted' && record.mint?.status === 'confirmed' && record.mint.tokenId && record.mint.contractAddress && (!activeContract || record.mint.contractAddress.toLowerCase() === activeContract) && record.mint.transactionHash && record.mint.tokenURI).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, Math.max(1, Math.min(500, limit)));
+    return [...(await this.load()).values()].filter((record) => isConfirmedMint(record) && record.mint?.contractAddress && (!activeContract || record.mint.contractAddress.toLowerCase() === activeContract)).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, Math.max(1, Math.min(500, limit)));
   }
   async deleteOwned(id: string, ownerSessionId: string): Promise<boolean> {
     const records = await this.load(); const record = records.get(id); if (!record || record.ownerSessionId !== ownerSessionId) return false;
@@ -133,3 +135,5 @@ export class FileArtworkRepository implements ArtworkRepository {
     return this.writeQueue;
   }
 }
+
+function isConfirmedMint(record: ArtworkDocument): boolean { return record.mint?.status === 'confirmed' && Boolean(record.mint.tokenId && record.mint.contractAddress && record.mint.transactionHash && record.mint.tokenURI); }

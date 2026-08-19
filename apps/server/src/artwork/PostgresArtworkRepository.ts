@@ -11,6 +11,7 @@ export class PostgresArtworkRepository implements ArtworkRepository {
     if (input.id) {
       const existing = await this.get(input.id);
       if (existing && existing.ownerSessionId !== input.ownerSessionId) throw new Error('Artwork owner mismatch');
+      if (existing?.mint?.status === 'confirmed' && existing.mint.tokenId && existing.mint.contractAddress && existing.mint.transactionHash && existing.mint.tokenURI) return existing;
       const document = createDocument(input, now, existing ?? undefined);
       const result = await this.pool.query(`insert into artworks(id,owner_session_id,origin,status,title,description,canvas_ratio,width,height,strokes,preview_url,source_round_id,mint,created_at,updated_at)
         values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13::jsonb,$14,$15)
@@ -33,7 +34,7 @@ export class PostgresArtworkRepository implements ArtworkRepository {
   async get(id: string): Promise<ArtworkDocument | null> { const result = await this.pool.query('select * from artworks where id=$1', [id]); return result.rows[0] ? fromRow(result.rows[0]) : null; }
   async listByOwner(ownerSessionId: string): Promise<ArtworkDocument[]> { const result = await this.pool.query('select * from artworks where owner_session_id=$1 order by updated_at desc', [ownerSessionId]); return result.rows.map(fromRow); }
   async listMinted(limit = 100, contractAddress?: string): Promise<ArtworkDocument[]> {
-    const result = await this.pool.query(`select * from artworks where status='minted' and mint->>'status'='confirmed' and coalesce(mint->>'tokenId','')<>'' and coalesce(mint->>'contractAddress','')<>'' and ($2::text is null or lower(mint->>'contractAddress')=lower($2)) and coalesce(mint->>'transactionHash','')<>'' and coalesce(mint->>'tokenURI','')<>'' order by updated_at desc limit $1`, [Math.max(1, Math.min(500, limit)), contractAddress ?? null]);
+    const result = await this.pool.query(`select * from artworks where mint->>'status'='confirmed' and coalesce(mint->>'tokenId','')<>'' and coalesce(mint->>'contractAddress','')<>'' and ($2::text is null or lower(mint->>'contractAddress')=lower($2)) and coalesce(mint->>'transactionHash','')<>'' and coalesce(mint->>'tokenURI','')<>'' order by updated_at desc limit $1`, [Math.max(1, Math.min(500, limit)), contractAddress ?? null]);
     return result.rows.map(fromRow);
   }
   async deleteOwned(id: string, ownerSessionId: string): Promise<boolean> {

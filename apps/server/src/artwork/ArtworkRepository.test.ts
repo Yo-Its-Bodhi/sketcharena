@@ -58,6 +58,8 @@ describe('ArtworkRepository', () => {
     expect(publicItem).not.toHaveProperty('ownerSessionId');
     expect(publicItem).not.toHaveProperty('mint.walletAddress');
     expect(publicItem).toMatchObject({ tokenId: '7', seasonId: 0, seasonName: 'The First Mess' });
+    const attemptedOverwrite = await repository.save({ ...minted, status: 'mint-ready', title: 'Accidental post-mint overwrite', strokes: [] });
+    expect(attemptedOverwrite).toMatchObject({ status: 'minted', title: 'Public panic', mint: { status: 'confirmed', tokenId: '7' } });
   });
 
   it('can scope the public Archive to the active collection contract', async () => {
