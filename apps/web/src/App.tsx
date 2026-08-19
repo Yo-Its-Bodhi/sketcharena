@@ -192,6 +192,7 @@ export function App() {
       {screen === 'backstage' && <Backstage key="backstage" home={() => { history.pushState({}, '', '/'); setScreen(name ? 'lobby' : 'landing'); }}/>}
     </AnimatePresence>
     <AnimatePresence>{error && screen !== 'landing' && <motion.div className="toast-error" initial={{ y: 30, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 20, opacity: 0 }} role="alert"><b>WHOOPS.</b> {error}</motion.div>}</AnimatePresence>
+    {screen !== 'arena' && screen !== 'studio' && <WorldSignature/>}
   </div></MotionConfig>;
 }
 
@@ -1085,6 +1086,14 @@ function MainNav({ active, play, studio, vault, archive, leaderboard }: MainNavP
 }
 
 function Brand() { return <div className="brand"><img src="/brand/sketch-arena-mark.svg" alt=""/><span className="brand-type"><b>SKETCH</b><strong>ARENA</strong><small>DRAW BADLY. GUESS LOUDLY.</small></span></div>; }
+
+function WorldSignature() {
+  return <footer className="world-signature">
+    <span>WELCOME TO ANOTHER WEIRD WORLD BY BODHIX.</span>
+    <a href="https://bodhix.io/" target="_blank" rel="noreferrer">BODHIX.IO ↗</a>
+    <small>© {new Date().getFullYear()} BODHIX</small>
+  </footer>;
+}
 function Avatar({ seed, item, frame }: { seed: number; item?: string; frame?: string }) { const colors = ['#ef476f','#ffb703','#27ae8a','#2878ff','#8b5cf6']; const itemColors: Record<string,string> = { 'yellow-weirdo-avatar': '#ffb703', 'green-chaos-avatar': '#27ae8a', 'golden-chaos-avatar': '#f2c94c' }; return <span className={`avatar ${item ? 'cosmetic-avatar' : ''} ${frame ? 'cosmetic-frame' : ''}`} title={[item, frame].filter(Boolean).map((value) => value!.replaceAll('-', ' ')).join(' · ')} style={{ '--avatar': itemColors[item ?? ''] ?? colors[Math.abs(seed) % colors.length] } as React.CSSProperties}><i/><b/>{item === 'golden-chaos-avatar' && <em>♛</em>}</span>; }
 
 function storeEquipped(player: PlayerProgress): void { for (const slot of ['brush','reaction'] as const) { const key = `sketch-equipped-${slot}`; if (player.equipped[slot]) localStorage.setItem(key, player.equipped[slot]!); else localStorage.removeItem(key); } }
