@@ -136,7 +136,7 @@ describe('MintService', () => {
     expect(rpcMethods).toEqual(['eth_chainId', 'eth_getCode', ...Array(9).fill('eth_call')]);
   });
 
-  it('abandons retired-contract attempts for deletion but protects current-contract submissions', async () => {
+  it('allows unsigned voucher deletion, abandons retired attempts and protects current-contract submissions', async () => {
     const now = 10_000; const sessionId = '11111111-1111-4111-8111-111111111111';
     const artwork = new MemoryArtworkRepository(); const progression = new MemoryProgressionRepository(() => now); const mints = new MemoryMintRepository();
     const config: MintConfiguration = { enabled: false, missing: [], contractAddress: contract, chainId: 31337, chainName: 'Local EVM', nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
@@ -152,6 +152,13 @@ describe('MintService', () => {
     const service = new MintService(artwork, progression, mints, config, () => now);
     await expect(service.releaseForArtworkDeletion(sessionId, retiredArt.id)).resolves.toBeUndefined();
     expect(await mints.getMint(record.id, sessionId)).toMatchObject({ status: 'failed', error: 'Abandoned after the collection contract was retired' });
+
+    const preparedArt = await artwork.save({ ownerSessionId: sessionId, origin: 'studio', status: 'mint-ready', title: 'Unsigned panic', canvasRatio: 'square', width: 1200, height: 1200, strokes: [] });
+    const preparedRecord = { ...record, id: '44444444-4444-4444-8444-444444444444', artworkId: preparedArt.id, status: 'prepared', contractAddress: contract,
+      transactionRequest: { ...record.transactionRequest, to: contract } } satisfies MintRecord;
+    await mints.saveMint(preparedRecord); await artwork.updateMint(preparedArt.id, sessionId, { network: 'shido', status: 'prepared', walletAddress: preparedRecord.walletAddress, contractAddress: contract, tokenURI: preparedRecord.tokenURI }, 'mint-ready');
+    await expect(service.releaseForArtworkDeletion(sessionId, preparedArt.id)).resolves.toBeUndefined();
+    expect(await mints.getMint(preparedRecord.id, sessionId)).toMatchObject({ status: 'expired', error: 'Unsigned voucher abandoned when the artwork was deleted' });
 
     const activeArt = await artwork.save({ ownerSessionId: sessionId, origin: 'studio', status: 'mint-ready', title: 'Live panic', canvasRatio: 'square', width: 1200, height: 1200, strokes: [] });
     const activeRecord = { ...record, id: '33333333-3333-4333-8333-333333333333', artworkId: activeArt.id, contractAddress: contract, transactionRequest: { ...record.transactionRequest, to: contract } } satisfies MintRecord;
