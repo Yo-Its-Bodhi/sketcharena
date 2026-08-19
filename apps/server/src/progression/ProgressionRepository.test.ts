@@ -100,6 +100,14 @@ describe('ProgressionRepository', () => {
     expect((await repository.leaderboard('all-time', now)).entries[0]?.matches).toBe(1);
   });
 
+  it('counts late-arrival performance without granting finish or crown credit', async () => {
+    const now = Date.UTC(2026, 7, 17, 12); const repository = new MemoryProgressionRepository(() => now);
+    const player = await repository.ensurePlayer('99999999-9999-4999-8999-999999999998', 'Party Crasher');
+    await repository.recordMatch({ matchId: '99999999-9999-4999-8999-999999999997', endedAt: now, players: [{ sessionId: player.sessionId, gamePoints: 700, won: true, sharedWin: false, correctGuesses: 2, fastestGuesses: 1, drawings: 1, completedMatch: false }] });
+    const totals = (await repository.getPlayer(player.sessionId))!.competitive.allTime;
+    expect(totals).toMatchObject({ matches: 0, wins: 0, gamePoints: 700, correctGuesses: 2, fastestGuesses: 1, drawings: 1, chaosScore: 290 });
+  });
+
   it('uses shared ranks for equal leaderboard scores and resets period views in UTC', async () => {
     const monday = Date.UTC(2026, 7, 17, 1); const repository = new MemoryProgressionRepository(() => monday);
     const a = await repository.ensurePlayer('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Alpha'); const b = await repository.ensurePlayer('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Beta');

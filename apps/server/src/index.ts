@@ -659,14 +659,16 @@ async function awardMatchProgress(result: MatchResult): Promise<void> {
   await progression.recordMatch({ matchId: result.matchId, endedAt: Math.max(...result.rounds.map((round) => round.endedAt), Date.now()), players: result.standings.map((player) => ({
     sessionId: player.sessionId, gamePoints: player.score, won: result.winners.some((winner) => winner.sessionId === player.sessionId), sharedWin: result.winners.length > 1 && result.winners.some((winner) => winner.sessionId === player.sessionId),
     correctGuesses: result.rounds.reduce((total, round) => total + Number(round.correct.some((guess) => guess.playerId === player.id)), 0), fastestGuesses: fastestGuess && result.rounds.some((round) => round.correct.some((guess) => guess.playerId === player.id && guess.elapsedMs === fastestGuess.elapsedMs)) ? 1 : 0,
-    drawings: result.rounds.filter((round) => round.drawerId === player.id && round.reason !== 'drawer-left').length,
+    drawings: result.rounds.filter((round) => round.drawerId === player.id && round.reason !== 'drawer-left').length, completedMatch: !player.lateArrival,
   })) });
   for (const player of result.standings) {
     const matchKey = `match-${result.matchId}-${player.sessionId}`;
-    const xp = 100 + Math.min(400, Math.floor(player.score / 100) * 25);
-    await progression.grant({ sessionIds: [player.sessionId], kind: 'xp', amount: xp, reason: `Finished a match · +${xp} Season XP`, campaignId: `${matchKey}-xp`, idempotencyKey: `${matchKey}-xp`, actor: 'system:match' });
-    await progression.grant({ sessionIds: [player.sessionId], kind: 'achievement', amount: 1, itemId: 'first-mess', reason: 'Played your first complete Sketch Arena match', campaignId: 'achievement-first-mess', idempotencyKey: `${matchKey}-first-mess`, actor: 'system:match' });
-    if (result.winners.some((winner) => winner.sessionId === player.sessionId)) await progression.grant({ sessionIds: [player.sessionId], kind: 'achievement', amount: 1, itemId: 'crowned-chaos', reason: result.winners.length > 1 ? 'Shared the Sketch Arena crown' : 'Won a Sketch Arena match', campaignId: 'achievement-crowned-chaos', idempotencyKey: `${matchKey}-winner`, actor: 'system:match' });
+    if (!player.lateArrival) {
+      const xp = 100 + Math.min(400, Math.floor(player.score / 100) * 25);
+      await progression.grant({ sessionIds: [player.sessionId], kind: 'xp', amount: xp, reason: `Finished a match · +${xp} Season XP`, campaignId: `${matchKey}-xp`, idempotencyKey: `${matchKey}-xp`, actor: 'system:match' });
+      await progression.grant({ sessionIds: [player.sessionId], kind: 'achievement', amount: 1, itemId: 'first-mess', reason: 'Played your first complete Sketch Arena match', campaignId: 'achievement-first-mess', idempotencyKey: `${matchKey}-first-mess`, actor: 'system:match' });
+      if (result.winners.some((winner) => winner.sessionId === player.sessionId)) await progression.grant({ sessionIds: [player.sessionId], kind: 'achievement', amount: 1, itemId: 'crowned-chaos', reason: result.winners.length > 1 ? 'Shared the Sketch Arena crown' : 'Won a Sketch Arena match', campaignId: 'achievement-crowned-chaos', idempotencyKey: `${matchKey}-winner`, actor: 'system:match' });
+    }
     if (fastestGuess && result.rounds.some((round) => round.correct.some((guess) => guess.playerId === player.id && guess.elapsedMs === fastestGuess.elapsedMs))) await progression.grant({ sessionIds: [player.sessionId], kind: 'achievement', amount: 1, itemId: 'panic-button', reason: 'Landed the fastest correct guess in a match', campaignId: 'achievement-panic-button', idempotencyKey: `${matchKey}-fastest`, actor: 'system:match' });
     if (result.rounds.some((round) => round.drawerId === player.id && round.strokes.length >= 5)) await progression.grant({ sessionIds: [player.sessionId], kind: 'achievement', amount: 1, itemId: 'certified-mess', reason: 'Finished a drawing with at least five marks', campaignId: 'achievement-certified-mess', idempotencyKey: `${matchKey}-artist`, actor: 'system:match' });
   }

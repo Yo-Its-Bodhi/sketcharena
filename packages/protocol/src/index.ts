@@ -44,6 +44,7 @@ export interface PlayerView {
   hasGuessed: boolean;
   connected: boolean;
   ready: boolean;
+  lateArrival: boolean;
 }
 
 export interface RoomSummary {

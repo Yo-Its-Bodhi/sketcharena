@@ -41,7 +41,7 @@ export interface CompetitiveProfile { allTime: CompetitiveTotals; season: Compet
 export type LeaderboardPeriod = 'weekly' | 'monthly' | 'season' | 'all-time';
 export interface LeaderboardEntry extends CompetitiveTotals { rank: number; sessionId: string; name: string; level: number; avatarItem?: string; titleItem?: string; frameItem?: string; }
 export interface LeaderboardResult { period: LeaderboardPeriod; periodKey: string; label: string; startsAt?: number; endsAt?: number; scoring: string[]; prizes: Array<{ rank: string; label: string; detail: string }>; entries: LeaderboardEntry[]; }
-export interface MatchProgressInput { matchId: string; endedAt: number; players: Array<{ sessionId: string; gamePoints: number; won: boolean; sharedWin: boolean; correctGuesses: number; fastestGuesses: number; drawings: number }> }
+export interface MatchProgressInput { matchId: string; endedAt: number; players: Array<{ sessionId: string; gamePoints: number; won: boolean; sharedWin: boolean; correctGuesses: number; fastestGuesses: number; drawings: number; completedMatch?: boolean }> }
 
 export interface RewardGrantInput {
   sessionIds: string[];
@@ -236,8 +236,9 @@ export function recordMatchInState(state: ProgressionState, input: MatchProgress
   for (const result of input.players) {
     const player = state.players.find((candidate) => candidate.sessionId === result.sessionId); if (!player) continue;
     normalizePlayer(player);
-    const delta: CompetitiveTotals = { chaosScore: 100 + (result.won ? result.sharedWin ? 175 : 250 : 0) + result.correctGuesses * 75 + result.fastestGuesses * 100 + result.drawings * 40,
-      matches: 1, wins: result.won ? 1 : 0, sharedWins: result.sharedWin ? 1 : 0, correctGuesses: result.correctGuesses, fastestGuesses: result.fastestGuesses, drawings: result.drawings, gamePoints: result.gamePoints };
+    const completedMatch = result.completedMatch !== false;
+    const delta: CompetitiveTotals = { chaosScore: (completedMatch ? 100 : 0) + (completedMatch && result.won ? result.sharedWin ? 175 : 250 : 0) + result.correctGuesses * 75 + result.fastestGuesses * 100 + result.drawings * 40,
+      matches: completedMatch ? 1 : 0, wins: completedMatch && result.won ? 1 : 0, sharedWins: completedMatch && result.sharedWin ? 1 : 0, correctGuesses: result.correctGuesses, fastestGuesses: result.fastestGuesses, drawings: result.drawings, gamePoints: result.gamePoints };
     addTotals(player.competitive.allTime, delta); addTotals(player.competitive.season, delta);
     player.competitive.weeks[week] ??= emptyTotals(); player.competitive.months[month] ??= emptyTotals();
     addTotals(player.competitive.weeks[week]!, delta); addTotals(player.competitive.months[month]!, delta);

@@ -422,6 +422,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .score-player > div small { color: rgba(255,255,255,.44); font-size: 8px; letter-spacing: .09em; }
 .score-player > strong { font-family: 'Archivo Black'; font-size: 13px; }
 .score-player.offline { opacity: .38; }
+.score-player.late-arrival { box-shadow: inset 3px 0 0 var(--blue); }
+.score-player.late-arrival > div small { color: #77a9ff; }
 .score-player.moderatable { padding-right: 25px; }
 .player-kick, .player-report { position: absolute; z-index: 2; right: 3px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: rgba(255,255,255,.38); font-size: 13px; font-weight: 1000; line-height: 1; opacity: 0; transition: opacity .16s ease, color .16s ease, background .16s ease; }
 .player-kick { top: 3px; font-size: 15px; }
