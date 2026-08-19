@@ -163,7 +163,11 @@ export class PostgresEcosystemRepository {
       const issued = await client.query("select coalesce(sum(quantity),0)::bigint count from bodhix_entitlements where reward_id=$1 and status!='revoked'", [reward.rows[0].id]);
       const supplyCap = reward.rows[0].supply_cap === null ? null : Number(reward.rows[0].supply_cap);
       const alreadyIssued = Number(issued.rows[0]?.count ?? 0);
-      if (supplyCap !== null && input.quantity * preview.accounts.length > supplyCap - alreadyIssued) throw new Error('Reward supply would be exceeded');
+      const grantKeys = preview.accounts.map((account) => `${input.idempotencyKey}:${account.id}`);
+      const existingKeys = await client.query('select idempotency_key from bodhix_entitlements where idempotency_key=any($1::text[])', [grantKeys]);
+      const existing = new Set(existingKeys.rows.map((row) => String(row.idempotency_key)));
+      const newGrantCount = grantKeys.filter((key) => !existing.has(key)).length;
+      if (supplyCap !== null && input.quantity * newGrantCount > supplyCap - alreadyIssued) throw new Error('Reward supply would be exceeded');
       const granted = [];
       for (const account of preview.accounts) {
         const idempotencyKey = `${input.idempotencyKey}:${account.id}`;
