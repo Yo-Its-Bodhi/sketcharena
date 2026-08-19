@@ -681,6 +681,9 @@ button.play-path:hover { transform: translateY(-6px) rotate(-.5deg); box-shadow:
 .setup-sheet fieldset button > span { font-weight: 900; text-transform: uppercase; }
 .setup-sheet fieldset button small { display: block; margin-top: 3px; font-size: 8px; font-weight: 500; text-transform: none; opacity: .64; }
 .setup-sheet .prompt-deck-grid button { min-height: 82px; }
+.setup-sheet .prompt-mode-grid { grid-template-columns: repeat(3,1fr); margin-bottom: 9px; }
+.setup-sheet .difficulty-grid { grid-template-columns: repeat(4,1fr); margin-top: 9px; }
+.setup-sheet .difficulty-grid button { min-height: 76px; }
 .loot-explainer { max-width: 490px; margin: -10px 0 20px; color: #71685e; font-size: 11px; line-height: 1.45; }
 .setup-rules { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin: -4px 0 16px; }
 .setup-rules fieldset { display: block; min-width: 0; margin: 0; }
@@ -696,6 +699,8 @@ button.play-path:hover { transform: translateY(-6px) rotate(-.5deg); box-shadow:
 .privacy-toggle > b { font-size: 10px; }
 .privacy-toggle > small { color: #746b60; font-size: 9px; }
 .setup-submit { width: 100%; margin-top: 13px; }
+
+.prompt-console>header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:18px}.prompt-console h2{margin:5px 0}.prompt-console p{max-width:650px}.prompt-stats{display:flex;gap:7px}.prompt-stats>b{min-width:72px;padding:12px;text-align:center;background:var(--yellow);border:3px solid var(--ink);border-radius:10px;box-shadow:0 4px 0 var(--ink);font-family:var(--display);font-size:22px}.prompt-stats small{display:block;margin-top:4px;font-family:inherit;font-size:7px;letter-spacing:.12em}.prompt-admin-grid{display:grid;grid-template-columns:minmax(280px,.65fr) minmax(360px,1.35fr);gap:18px}.prompt-import{display:grid;grid-template-columns:1fr 1fr;gap:9px;align-content:start}.prompt-import label,.prompt-library{font-size:8px;font-weight:1000;letter-spacing:.11em}.prompt-import select,.prompt-import textarea,.prompt-library>input{width:100%;margin-top:5px;padding:11px;color:var(--ink);background:#fff;border:2px solid var(--ink);border-radius:8px;font:inherit}.prompt-paste{grid-column:1/-1}.prompt-import textarea{min-height:150px;resize:vertical;font-size:12px;line-height:1.5}.prompt-import>button{grid-column:1/-1;padding:13px;color:#fff;background:var(--coral);border:3px solid var(--ink);border-radius:9px;box-shadow:0 4px 0 var(--ink);font-weight:1000}.prompt-library>input{margin:0 0 8px;font-size:12px}.prompt-library>div{max-height:330px;overflow:auto;border:2px solid var(--ink);border-radius:9px;background:#fff}.prompt-library article{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;border-bottom:1px solid #d8d0c3}.prompt-library article:last-child{border-bottom:0}.prompt-library article.inactive{opacity:.48}.prompt-library article span{display:grid;gap:2px}.prompt-library article b{font-size:12px;letter-spacing:0}.prompt-library article small{font-size:7px;color:#746b60}.prompt-library article button{min-width:52px;padding:7px;background:#70d6a7;border:2px solid var(--ink);border-radius:7px;font-size:8px;font-weight:1000}.prompt-library article.inactive button{background:#ddd7cd}
 
 .arena-bar > div:nth-child(2) small i { margin-right: 6px; }
 .waiting-tip { max-width: 410px; margin: 10px 0 0; padding: 10px 13px; color: #6d6255; background: rgba(255,255,255,.52); border: 2px dashed #9b9183; border-radius: 10px; font-size: 11px; }
@@ -755,6 +760,8 @@ button.play-path:hover { transform: translateY(-6px) rotate(-.5deg); box-shadow:
   .setup-sheet { padding: 25px 18px; }
   .setup-sheet > h2 { font-size: 43px; }
   .setup-sheet fieldset { grid-template-columns: 1fr; }
+  .setup-sheet .prompt-mode-grid,.setup-sheet .difficulty-grid { grid-template-columns: 1fr 1fr; }
+  .prompt-console>header{display:grid}.prompt-stats{width:100%}.prompt-stats>b{flex:1;min-width:0}.prompt-admin-grid{grid-template-columns:1fr}.prompt-library>div{max-height:280px}
   .setup-sheet fieldset button { flex-direction: row; align-items: center; }
   .setup-sheet fieldset button > span { display: flex; flex-direction: column; }
   .reaction-bursts { right: 80px; bottom: 300px; }

@@ -30,6 +30,7 @@ import { PostgresProgressionRepository } from './progression/PostgresProgression
 import { PostgresPromotionRepository } from './promotion/PostgresPromotionRepository.js';
 import { PostgresReportRepository } from './moderation/PostgresReportRepository.js';
 import { preparePanicArchiveDeployment } from './mint/PanicArchiveDeployment.js';
+import { MemoryPromptRepository, PostgresPromptRepository, PromptLibrary, PROMPT_CATEGORIES, PROMPT_DIFFICULTIES } from './prompt/PromptLibrary.js';
 
 const PORT = Number(process.env.PORT ?? 4100);
 const BIND_HOST = process.env.BIND_HOST ?? '127.0.0.1';
@@ -76,6 +77,10 @@ const roomBindings = new Set<string>();
 const persistence = loadPersistenceConfiguration();
 const databasePool = persistence.databaseUrl ? new Pool({ connectionString: persistence.databaseUrl, max: Number(process.env.DATABASE_POOL_MAX ?? 10), idleTimeoutMillis: 30_000, connectionTimeoutMillis: 5_000, application_name: 'sketch-arena' }) : null;
 if (databasePool) await databasePool.query('select 1');
+const promptRepository = databasePool ? new PostgresPromptRepository(databasePool) : new MemoryPromptRepository();
+if (promptRepository instanceof PostgresPromptRepository) await promptRepository.seedDefaults();
+const promptLibrary = new PromptLibrary(promptRepository);
+await promptLibrary.load();
 const artwork = databasePool
   ? new PostgresArtworkRepository(databasePool)
   : persistence.artworkFile === ':memory:'
@@ -133,6 +138,7 @@ const passkeyRegistrationSchema = z.object({ challengeId: z.string().uuid(), lab
 const passkeyAuthenticationSchema = z.object({ challengeId: z.string().uuid(), deviceLabel: z.string().trim().min(2).max(80).default('Passkey device'), response: z.object({ id: z.string().min(1) }).passthrough() });
 const roomCreateSchema = z.object({
   name: z.string().trim().min(2).max(36), category: z.enum(['chaos', 'classic', 'crypto', 'animals', 'food', 'screen', 'music', 'places', 'legends']).default('chaos'),
+  promptMode: z.enum(['mixed', 'category', 'daily']).optional().default('category'), difficulty: z.enum(['easy', 'medium', 'hard', 'mixed']).optional().default('mixed'),
   isPrivate: z.boolean().optional().default(false), maxPlayers: z.number().int().min(2).max(GAME.maxPlayers).optional().default(8),
   roundSeconds: z.union([z.literal(30), z.literal(45), z.literal(60)]).optional().default(45),
 });
@@ -144,6 +150,8 @@ const kickPlayerSchema = z.object({ playerId: z.string().min(1).max(24) });
 const reportPlayerSchema = z.object({ playerId: z.string().min(1).max(24), category: z.enum(['harassment', 'hate-or-threats', 'spam', 'cheating', 'unsafe-art', 'other']), detail: z.string().trim().min(10).max(500) });
 const reportStatusSchema = z.enum(['open', 'reviewing', 'resolved', 'dismissed']);
 const reportUpdateSchema = z.object({ status: reportStatusSchema, resolutionNote: z.string().trim().min(3).max(500) });
+const promptCreateSchema = z.object({ text: z.string().trim().min(2).max(120), category: z.enum(PROMPT_CATEGORIES), difficulty: z.enum(PROMPT_DIFFICULTIES), active: z.boolean().default(true), seasonalTag: z.string().trim().max(48).optional() });
+const promptUpdateSchema = promptCreateSchema.partial().refine((value) => Object.keys(value).length > 0);
 const equipItemSchema = z.object({ itemId: z.string().trim().min(2).max(80) });
 const leaderboardPeriodSchema = z.enum(['weekly', 'monthly', 'season', 'all-time']);
 const strokeSchema: z.ZodType<Stroke> = z.object({
@@ -405,6 +413,28 @@ app.get('/api/admin/players', async (request, response) => {
   if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
   const search = z.string().max(80).catch('').parse(request.query.search); return response.json((await progression.listPlayers(search)).map(publicProgression));
 });
+app.get('/api/admin/prompts', (request, response) => {
+  if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
+  return response.json({ summary: promptLibrary.summary(), prompts: promptLibrary.list() });
+});
+app.post('/api/admin/prompts', async (request, response) => {
+  if (!authorizeAdmin(request.headers.authorization, request.ip, 'admin')) return response.status(adminStatus()).json({ error: adminError('admin') });
+  const input = promptCreateSchema.safeParse(request.body); if (!input.success) return response.status(400).json({ error: input.error.issues[0]?.message ?? 'Prompt is invalid' });
+  try { return response.status(201).json(await promptLibrary.create(input.data)); } catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'Prompt could not be created' }); }
+});
+app.post('/api/admin/prompts/import', async (request, response) => {
+  if (!authorizeAdmin(request.headers.authorization, request.ip, 'admin')) return response.status(adminStatus()).json({ error: adminError('admin') });
+  const input = z.object({ texts: z.array(z.string().trim().min(2).max(120)).min(1).max(500), category: z.enum(PROMPT_CATEGORIES), difficulty: z.enum(PROMPT_DIFFICULTIES), seasonalTag: z.string().trim().max(48).optional() }).safeParse(request.body);
+  if (!input.success) return response.status(400).json({ error: input.error.issues[0]?.message ?? 'Prompt import is invalid' });
+  let added = 0; let skipped = 0;
+  for (const text of [...new Set(input.data.texts)]) { try { await promptLibrary.create({ text, category: input.data.category, difficulty: input.data.difficulty, active: true, seasonalTag: input.data.seasonalTag }); added += 1; } catch { skipped += 1; } }
+  return response.status(201).json({ added, skipped, summary: promptLibrary.summary() });
+});
+app.patch('/api/admin/prompts/:promptId', async (request, response) => {
+  if (!authorizeAdmin(request.headers.authorization, request.ip, 'admin')) return response.status(adminStatus()).json({ error: adminError('admin') });
+  const id = z.string().uuid().safeParse(request.params.promptId); const input = promptUpdateSchema.safeParse(request.body); if (!id.success || !input.success) return response.status(400).json({ error: 'Prompt update is invalid' });
+  try { return response.json(await promptLibrary.update(id.data, input.data)); } catch (error) { return response.status(404).json({ error: error instanceof Error ? error.message : 'Prompt not found' }); }
+});
 app.get('/api/admin/leaderboard-prizes/preview', async (request, response) => {
   if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
   const period = z.enum(['weekly', 'monthly']).catch('weekly').parse(request.query.period);
@@ -525,7 +555,9 @@ io.on('connection', (socket) => {
     const input = roomCreateSchema.parse(payload);
     equipped = (await progression.getPlayer(sessionId!))?.equipped ?? equipped;
     leaveCurrent(sessionId!, socket.id);
-    const room = new GameRoom(input.name, input.category, input.isPrivate, input.maxPlayers, input.roundSeconds * 1000);
+    const room = new GameRoom(input.name, input.category, input.isPrivate, input.maxPlayers, input.roundSeconds * 1000, Date.now, Math.random, input.promptMode, input.difficulty,
+      (mode, category, difficulty, excluded, random) => promptLibrary.choose(mode, category, difficulty, excluded, random),
+      (text, solved, totalSolveMs) => { void promptLibrary.record(text, solved, totalSolveMs).catch((error) => log('error', 'prompt.analytics_failed', errorFields(error))); });
     rooms.set(room.id, room); bindRoom(room);
     socket.join(room.id); room.join(sessionId!, socket.id, playerName, equipped); socket.emit('room:state', room.view());
     broadcastRooms();
