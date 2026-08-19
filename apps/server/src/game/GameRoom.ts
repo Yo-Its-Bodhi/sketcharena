@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { DRAW_LIMITS, type CanvasRatio, type FeedItem, type MatchResult, type PlayerView, type RoomPhase, type RoomSummary, type RoomView, type RoundResult, type Stroke } from '@sketch-arena/protocol';
+import { DRAW_LIMITS, type CanvasRatio, type FeedItem, type MatchResult, type PlayerView, type PromptDifficulty, type PromptMode, type RoomPhase, type RoomSummary, type RoomView, type RoundResult, type Stroke } from '@sketch-arena/protocol';
 import { randomWord } from '../words.js';
 
 export const GAME = {
@@ -86,6 +86,10 @@ export class GameRoom {
     readonly roundMs: number = GAME.roundMs,
     private readonly clock: () => number = Date.now,
     private readonly random: () => number = Math.random,
+    readonly promptMode: PromptMode = 'category',
+    readonly difficulty: PromptDifficulty | 'mixed' = 'mixed',
+    private readonly promptPicker: (mode: PromptMode, category: string, difficulty: PromptDifficulty | 'mixed', excluded: ReadonlySet<string>, random: () => number) => string = (_mode, category, _difficulty, excluded, random) => randomWord(category, random, excluded),
+    private readonly promptRecorder?: (text: string, solved: number, totalSolveMs: number) => void,
   ) {
     this.inviteCode = isPrivate ? randomBytes(4).toString('hex').toUpperCase() : null;
   }
@@ -295,11 +299,11 @@ export class GameRoom {
     this.phase = 'drawing';
     this.drawerId = drawer.id;
     const previousPrompt = this.currentPrompt;
-    let nextPrompt = randomWord(this.category, this.random, this.usedPrompts);
+    let nextPrompt = this.promptPicker(this.promptMode, this.category, this.difficulty, this.usedPrompts, this.random);
     if (this.usedPrompts.has(nextPrompt)) {
       this.usedPrompts.clear();
       if (previousPrompt) this.usedPrompts.add(previousPrompt);
-      nextPrompt = randomWord(this.category, this.random, this.usedPrompts);
+      nextPrompt = this.promptPicker(this.promptMode, this.category, this.difficulty, this.usedPrompts, this.random);
     }
     this.currentPrompt = nextPrompt;
     this.usedPrompts.add(this.currentPrompt);
@@ -431,6 +435,7 @@ export class GameRoom {
       funniestCandidates: [...this.funnyGuesses], reason, endedAt: this.clock(),
     };
     this.rounds.push(result);
+    this.promptRecorder?.(this.currentPrompt, this.correct.size, [...this.correct.values()].reduce((sum, value) => sum + value.elapsedMs, 0));
     this.emit('reveal', result);
     this.emitState();
     this.timer = setTimeout(() => this.beginCountdown(), GAME.revealMs);
@@ -446,7 +451,7 @@ export class GameRoom {
   view(): RoomView {
     return {
       id: this.id, name: this.name, phase: this.phase, playerCount: this.connectedPlayerCount(), maxPlayers: this.maxPlayers,
-      category: this.category, isPrivate: this.isPrivate, matchRounds: GAME.matchRounds,
+      category: this.category, promptMode: this.promptMode, difficulty: this.difficulty, isPrivate: this.isPrivate, matchRounds: GAME.matchRounds,
       roundSeconds: Math.round(this.roundMs / 1000), players: this.sortedPlayers(), hostId: this.hostId,
       drawerId: this.drawerId, round: this.round, totalRounds: this.totalRounds, deadline: this.deadline,
       hints: [...this.hints], strokes: [...this.strokes], canvasRatio: this.canvasRatio, feed: this.feedHistory.map((item) => ({ ...item, reactions: item.reactions ? { ...item.reactions } : undefined })),
@@ -455,7 +460,7 @@ export class GameRoom {
 
   summary(): RoomSummary {
     const view = this.view();
-    return { id: view.id, name: view.name, phase: view.phase, playerCount: view.playerCount, maxPlayers: view.maxPlayers, category: view.category, isPrivate: view.isPrivate, matchRounds: view.matchRounds, roundSeconds: view.roundSeconds };
+    return { id: view.id, name: view.name, phase: view.phase, playerCount: view.playerCount, maxPlayers: view.maxPlayers, category: view.category, promptMode: view.promptMode, difficulty: view.difficulty, isPrivate: view.isPrivate, matchRounds: view.matchRounds, roundSeconds: view.roundSeconds };
   }
   hasSession(sessionId: string): boolean { return Boolean(this.bySession(sessionId)); }
   ownsSocket(sessionId: string, socketId: string): boolean { return this.bySession(sessionId)?.socketId === socketId; }

@@ -1,4 +1,8 @@
 export type RoomPhase = 'lobby' | 'paused' | 'countdown' | 'drawing' | 'reveal' | 'afterparty';
+export type PromptDifficulty = 'easy' | 'medium' | 'hard';
+export type PromptMode = 'mixed' | 'category' | 'daily';
+export interface PromptCard { id: string; text: string; category: string; difficulty: PromptDifficulty; active: boolean; seasonalTag?: string; timesPlayed: number; timesSolved: number; averageSolveMs: number; createdAt: number; updatedAt: number; }
+export interface PromptLibrarySummary { total: number; active: number; dailySize: number; rotationKey: string; byDifficulty: Record<PromptDifficulty, number>; categories: Array<{ id: string; count: number }>; }
 export type CanvasRatio = 'square' | 'portrait' | 'landscape';
 export type DrawTool = 'pencil' | 'eraser' | 'fill';
 export type BrushStyle = 'pencil' | 'ink' | 'marker' | 'airbrush' | 'charcoal' | 'technical' | 'watercolor' | 'pastel' | 'pixel' | 'calligraphy' | 'neon';
@@ -49,6 +53,8 @@ export interface RoomSummary {
   playerCount: number;
   maxPlayers: number;
   category: string;
+  promptMode: PromptMode;
+  difficulty: PromptDifficulty | 'mixed';
   isPrivate: boolean;
   matchRounds: number;
   roundSeconds: number;
@@ -284,7 +290,7 @@ export const DRAW_LIMITS = {
 export interface ClientToServerEvents {
   'session:resume': (payload: { credential?: string; name: string }, ack: (value: Ack<{ sessionId: string; name: string }>) => void) => void;
   'rooms:subscribe': () => void;
-  'room:create': (payload: { name: string; category: string; isPrivate?: boolean; maxPlayers?: number; roundSeconds?: number }, ack: (value: Ack<{ room: RoomView; inviteCode?: string }>) => void) => void;
+  'room:create': (payload: { name: string; category: string; promptMode?: PromptMode; difficulty?: PromptDifficulty | 'mixed'; isPrivate?: boolean; maxPlayers?: number; roundSeconds?: number }, ack: (value: Ack<{ room: RoomView; inviteCode?: string }>) => void) => void;
   'room:join': (payload: { roomId?: string; inviteCode?: string }, ack: (value: Ack<{ room: RoomView }>) => void) => void;
   'room:leave': (ack: (value: Ack) => void) => void;
   'player:ready': (payload: { ready: boolean }, ack: (value: Ack) => void) => void;
