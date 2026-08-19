@@ -16,6 +16,7 @@ suite('PostgresEcosystemRepository integration', () => {
   const xpRewardCode = `ci-xp-${suffix}`;
   const consumableRewardCode = `ci-credit-${suffix}`;
   const campaignCode = `ci-campaign-${suffix}`;
+  const scheduledCampaignCode = `ci-scheduled-${suffix}`;
   const accountNameOne = `CI One ${suffix}`.slice(0, 20);
   const accountNameTwo = `CI Two ${suffix}`.slice(0, 20);
   const walletOne = `0x${createHash('sha256').update(`${suffix}:one`).digest('hex').slice(0, 40)}`;
@@ -35,6 +36,7 @@ suite('PostgresEcosystemRepository integration', () => {
     await pool.query('delete from bodhix_admin_audit where target_id=$1', [xpRewardCode]);
     await pool.query('delete from bodhix_admin_audit where target_id=$1', [consumableRewardCode]);
     await pool.query('delete from bodhix_campaigns where code=$1', [campaignCode]);
+    await pool.query('delete from bodhix_campaigns where code=$1', [scheduledCampaignCode]);
     await pool.query('delete from bodhix_reward_definitions where code=any($1::text[])', [[rewardCode, xpRewardCode, consumableRewardCode]]);
     await pool.end();
   });
@@ -125,6 +127,10 @@ suite('PostgresEcosystemRepository integration', () => {
     const duplicate = await repository.reserveClaim(consumed.appSession.token, 'poker', entitlement!.id, 1, `ci-claim-${suffix}`); expect(duplicate.id).toBe(claim.id);
     await repository.resolveClaim(String(claim.id), 'rejected', 'ci-operator');
     const restored = await repository.appSnapshot(consumed.appSession.token, 'poker'); expect(restored.entitlements.find((item) => item.code === consumableRewardCode)?.remaining).toBe(2);
+    const fulfilled = await repository.reserveClaim(consumed.appSession.token, 'poker', entitlement!.id, 1, `ci-claim-fulfilled-${suffix}`);
+    await repository.resolveClaim(String(fulfilled.id), 'fulfilled', 'ci-operator', `delivery-${suffix}`);
+    const reversed = await repository.reverseClaim(String(fulfilled.id), 'ci-admin', `reversal-${suffix}`); expect(reversed.status).toBe('reversed');
+    const reversedSnapshot = await repository.appSnapshot(consumed.appSession.token, 'poker'); expect(reversedSnapshot.entitlements.find((item) => item.code === consumableRewardCode)?.remaining).toBe(2);
   });
 
   it('targets campaigns by real app membership and launches idempotently', async () => {
@@ -132,5 +138,15 @@ suite('PostgresEcosystemRepository integration', () => {
     const preview = await repository.previewCampaign(String(saved.id)); expect(preview.audienceCount).toBeGreaterThanOrEqual(1); expect(preview.sample.some((account) => String(account.id) === accountOne)).toBe(true);
     const launched = await repository.executeCampaign(String(saved.id), 'ci-admin', 'LAUNCH BODHIX CAMPAIGN'); expect(launched.eligible).toBeGreaterThanOrEqual(1);
     const repeated = await repository.executeCampaign(String(saved.id), 'ci-admin', 'LAUNCH BODHIX CAMPAIGN'); expect(repeated.granted).toBe(0);
+    const cancelled = await repository.setCampaignStatus(String(saved.id), 'cancelled', 'ci-admin', true); expect(cancelled.revokedUnusedGrants).toBeGreaterThanOrEqual(1);
+  });
+
+  it('launches due scheduled campaigns and closes expired campaigns idempotently', async () => {
+    const base = Date.now();
+    const saved = await repository.saveCampaign({ code: scheduledCampaignCode, name: 'CI Scheduled Poker Members', rewardCode: consumableRewardCode, appId: 'poker', audience: { kind: 'app', appId: 'poker' }, quantityPerAccount: 1, startsAt: base + 100, endsAt: base + 1_000 }, 'ci-admin', base);
+    expect(saved.status).toBe('scheduled');
+    const launched = await repository.runCampaignMaintenance(base + 200); expect(launched.launched).toContain(String(saved.id)); expect(launched.failed).toHaveLength(0);
+    const repeated = await repository.runCampaignMaintenance(base + 300); expect(repeated.launched).toHaveLength(0);
+    const ended = await repository.runCampaignMaintenance(base + 1_100); expect(ended.ended).toContain(String(saved.id));
   });
 });

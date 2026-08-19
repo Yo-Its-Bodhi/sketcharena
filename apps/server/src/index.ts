@@ -477,8 +477,9 @@ const ecosystemCampaignSchema = z.object({
   audience: z.discriminatedUnion('kind', [z.object({ kind: z.literal('all') }), z.object({ kind: z.literal('app'), appId: z.string().trim().min(2).max(48) }), z.object({ kind: z.literal('accounts'), accountIds: z.array(z.string().uuid()).min(1).max(10_000) })]),
   quantityPerAccount: z.number().int().positive().max(1_000_000), maxGrants: z.number().int().positive().max(10_000_000).optional(), startsAt: z.number().int().positive().optional(), endsAt: z.number().int().positive().optional(), hidden: z.boolean().default(true),
 });
-const ecosystemCampaignStatusSchema = z.object({ status: z.enum(['paused','live','ended','cancelled']), confirmation: z.string() });
+const ecosystemCampaignStatusSchema = z.object({ status: z.enum(['paused','live','ended','cancelled']), revokeUnused: z.boolean().default(false), confirmation: z.string() });
 const ecosystemClaimResolutionSchema = z.object({ status: z.enum(['fulfilled','rejected']), externalReference: z.string().trim().max(200).optional(), confirmation: z.string() });
+const ecosystemClaimReversalSchema = z.object({ reversalReference: z.string().trim().min(3).max(200), confirmation: z.literal('REVERSE FULFILLED CLAIM') });
 app.post('/api/artworks', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request);
   if (!ownerSessionId) return response.status(401).json({ error: 'Vault authentication required' });
@@ -589,7 +590,7 @@ app.patch('/api/admin/ecosystem/campaigns/:campaignId/status', async (request, r
   if (!ecosystem) return response.status(503).json({ error: 'The BodhiX ecosystem database is not connected' });
   const campaignId = z.string().uuid().safeParse(request.params.campaignId); const input = ecosystemCampaignStatusSchema.safeParse(request.body);
   if (!campaignId.success || !input.success || input.data.confirmation !== `SET CAMPAIGN ${input.success ? input.data.status.toUpperCase() : ''}`) return response.status(400).json({ error: 'Exact campaign status confirmation is required' });
-  try { return response.json(await ecosystem.setCampaignStatus(campaignId.data, input.data.status, `backstage:${principal.name}`)); }
+  try { return response.json(await ecosystem.setCampaignStatus(campaignId.data, input.data.status, `backstage:${principal.name}`, input.data.revokeUnused)); }
   catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'Campaign status could not change' }); }
 });
 app.get('/api/admin/ecosystem/claims', async (request, response) => {
@@ -605,6 +606,14 @@ app.patch('/api/admin/ecosystem/claims/:claimId', async (request, response) => {
   if (!claimId.success || !input.success || input.data.confirmation !== `MARK CLAIM ${input.success ? input.data.status.toUpperCase() : ''}`) return response.status(400).json({ error: 'Exact claim confirmation is required' });
   try { return response.json(await ecosystem.resolveClaim(claimId.data, input.data.status, `backstage:${principal.name}`, input.data.externalReference)); }
   catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'Claim could not be resolved' }); }
+});
+app.post('/api/admin/ecosystem/claims/:claimId/reverse', async (request, response) => {
+  const principal = authorizeAdmin(request.headers.authorization, request.ip, 'admin'); if (!principal) return response.status(adminStatus()).json({ error: adminError('admin') });
+  if (!ecosystem) return response.status(503).json({ error: 'The BodhiX ecosystem database is not connected' });
+  const claimId = z.string().uuid().safeParse(request.params.claimId); const input = ecosystemClaimReversalSchema.safeParse(request.body);
+  if (!claimId.success || !input.success) return response.status(400).json({ error: 'Exact fulfilled-claim reversal confirmation and receipt are required' });
+  try { return response.json(await ecosystem.reverseClaim(claimId.data, `backstage:${principal.name}`, input.data.reversalReference)); }
+  catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'Claim could not be reversed' }); }
 });
 app.get('/api/admin/ecosystem/audit', async (request, response) => {
   if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
@@ -955,6 +964,15 @@ setInterval(() => {
   }
   broadcastRooms();
 }, 5_000).unref();
+
+if (ecosystem) setInterval(() => {
+  void ecosystem.runCampaignMaintenance().then((result) => {
+    if (result.launched.length || result.ended.length || result.failed.length) log(result.failed.length ? 'warn' : 'info', 'ecosystem.campaign_maintenance', {
+      launched: result.launched.length, ended: result.ended.length, failed: result.failed.length,
+      campaignIds: [...result.launched, ...result.ended].join(',').slice(0, 500), errors: result.failed.map((item) => `${item.campaignId}:${item.error}`).join('|').slice(0, 1_000),
+    });
+  }).catch((error) => log('error', 'ecosystem.campaign_maintenance_failed', errorFields(error)));
+}, 60_000).unref();
 
 server.listen(PORT, BIND_HOST, () => { operations.markReady(); log('info', 'server.ready', { host: BIND_HOST, port: PORT }); });
 server.on('error', (error) => { log('error', 'server.listen_failed', errorFields(error)); if (!operations.isDraining()) process.exit(1); });
