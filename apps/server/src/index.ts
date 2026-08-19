@@ -283,6 +283,9 @@ const ecosystemAppSessionSchema = z.object({ app: z.string().trim().min(2).max(4
 const ecosystemClaimSchema = z.object({
   app: z.string().trim().min(2).max(48), entitlementId: z.string().uuid(), quantity: z.number().int().positive().max(1_000_000), idempotencyKey: z.string().trim().min(8).max(160),
 });
+const ecosystemAppXpSchema = z.object({
+  app: z.string().trim().min(2).max(48), amount: z.number().int().positive().max(1_000), reason: z.string().trim().min(3).max(240), idempotencyKey: z.string().trim().min(8).max(120), sourceReference: z.string().trim().max(160).optional(), seasonId: z.string().trim().min(2).max(64).optional(),
+});
 const appBearer = (authorization: string | undefined) => authorization?.match(/^Bearer ([A-Za-z0-9_-]{40,128})$/)?.[1] ?? null;
 app.get('/api/ecosystem/connect', async (request, response) => {
   if (!ecosystem) return response.status(503).json({ error: 'The BodhiX account authority is not connected' });
@@ -317,6 +320,13 @@ app.post('/api/ecosystem/app/claims', async (request, response) => {
   if (!input.success || !token) return response.status(401).json({ error: 'A valid BodhiX app claim is required' });
   try { return response.status(201).json(await ecosystem.reserveClaim(token, input.data.app, input.data.entitlementId, input.data.quantity, input.data.idempotencyKey)); }
   catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'Reward claim could not be reserved' }); }
+});
+app.post('/api/ecosystem/app/xp', async (request, response) => {
+  if (!ecosystem) return response.status(503).json({ error: 'The BodhiX account authority is not connected' });
+  const input = ecosystemAppXpSchema.safeParse(request.body); const token = appBearer(request.headers.authorization);
+  if (!input.success || !token) return response.status(401).json({ error: 'A valid BodhiX app XP receipt is required' });
+  try { return response.status(201).json(await ecosystem.recordAppXp(token, input.data.app, input.data.amount, input.data.reason, input.data.idempotencyKey, input.data.sourceReference, input.data.seasonId)); }
+  catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'App XP receipt was rejected' }); }
 });
 const walletAddressSchema = z.string().regex(/^0x[0-9a-f]{40}$/i);
 const walletChallengeSchema = z.object({ address: walletAddressSchema });

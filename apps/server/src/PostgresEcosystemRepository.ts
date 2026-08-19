@@ -84,7 +84,7 @@ export class PostgresEcosystemRepository {
     if (!account.rows[0]) return null;
     const [wallets, entitlements, xp, memberships, claims] = await Promise.all([
       this.pool.query('select id,address,label,is_primary,verified_at from bodhix_wallets where account_id=$1 and revoked_at is null order by is_primary desc,verified_at', [accountId]),
-      this.pool.query(`select entitlement.id,reward.code,reward.name,reward.kind,reward.scope,reward.app_id,reward.season_id,entitlement.quantity,entitlement.remaining,entitlement.status,entitlement.expires_at,entitlement.granted_at
+      this.pool.query(`select entitlement.id,reward.code,reward.name,reward.kind,reward.scope,reward.app_id,reward.season_id,reward.metadata reward_metadata,entitlement.metadata entitlement_metadata,entitlement.quantity,entitlement.remaining,entitlement.status,entitlement.expires_at,entitlement.granted_at
         from bodhix_entitlements entitlement join bodhix_reward_definitions reward on reward.id=entitlement.reward_id
         where entitlement.account_id=$1 and entitlement.status='active' and (entitlement.expires_at is null or entitlement.expires_at>now()) and ($2 or reward.status='live') order by entitlement.granted_at desc`, [accountId, includePrivate]),
       this.pool.query('select app_id,season_id,coalesce(sum(amount),0)::int xp from bodhix_xp_events where account_id=$1 group by app_id,season_id order by app_id,season_id', [accountId]),
@@ -97,7 +97,7 @@ export class PostgresEcosystemRepository {
     return {
       account: { id: String(value.id), name: String(value.name), secured: Boolean(value.secured_at), createdAt: new Date(value.created_at).getTime() },
       wallets: wallets.rows.map((row) => ({ id: String(row.id), address: String(row.address), label: String(row.label), primary: Boolean(row.is_primary), verifiedAt: new Date(row.verified_at).getTime() })),
-      entitlements: entitlements.rows.map((row) => ({ id: String(row.id), code: String(row.code), name: String(row.name), kind: String(row.kind), scope: String(row.scope), appId: row.app_id ? String(row.app_id) : null, seasonId: row.season_id ? String(row.season_id) : null, quantity: Number(row.quantity), remaining: row.remaining === null ? null : Number(row.remaining), status: String(row.status), expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null, grantedAt: new Date(row.granted_at).getTime() })),
+      entitlements: entitlements.rows.map((row) => ({ id: String(row.id), code: String(row.code), name: String(row.name), kind: String(row.kind), scope: String(row.scope), appId: row.app_id ? String(row.app_id) : null, seasonId: row.season_id ? String(row.season_id) : null, quantity: Number(row.quantity), remaining: row.remaining === null ? null : Number(row.remaining), status: String(row.status), expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null, grantedAt: new Date(row.granted_at).getTime(), metadata: row.reward_metadata ?? {}, grantMetadata: row.entitlement_metadata ?? {} })),
       xp: xp.rows.map((row) => ({ appId: String(row.app_id), seasonId: row.season_id ? String(row.season_id) : null, xp: Number(row.xp) })),
       memberships: memberships.rows.map((row) => ({ appId: String(row.app_id), firstSeenAt: new Date(row.first_seen_at).getTime(), lastSeenAt: new Date(row.last_seen_at).getTime() })),
       claims: claims.rows.map((row) => ({ id: String(row.id), appId: String(row.app_id), code: String(row.code), name: String(row.name), quantity: Number(row.quantity), status: String(row.status), reservedAt: new Date(row.reserved_at).getTime(), fulfilledAt: row.fulfilled_at ? new Date(row.fulfilled_at).getTime() : null, externalReference: row.external_reference ? String(row.external_reference) : null })),
@@ -332,6 +332,17 @@ export class PostgresEcosystemRepository {
       await client.query(`update bodhix_entitlements set remaining=$2::bigint,status=case when $2::bigint=0 then 'consumed' else status end where id=$1`, [entitlementId, remaining]);
       return claim.rows[0];
     });
+  }
+
+  async recordAppXp(token: string, appId: string, amount: number, reason: string, idempotencyKey: string, sourceReference?: string, seasonId?: string, now = Date.now()) {
+    const authenticated = await this.authenticateAppSession(token, appId, now);
+    if (!Number.isInteger(amount) || amount <= 0 || amount > 1_000) throw new Error('App XP amount is outside the per-event limit');
+    const key = `app-xp:${appId}:${idempotencyKey}`;
+    const result = await this.pool.query(`insert into bodhix_xp_events(id,account_id,app_id,season_id,amount,reason,idempotency_key,source_reference,created_at,metadata)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict(idempotency_key) do nothing returning id`, [randomUUID(), authenticated.account.id, appId, seasonId ?? null, amount, reason, key, sourceReference ?? null, new Date(now), JSON.stringify({ source: 'authenticated-app-session' })]);
+    const total = await this.pool.query('select coalesce(sum(amount),0)::int xp from bodhix_xp_events where account_id=$1', [authenticated.account.id]);
+    const app = await this.pool.query('select coalesce(sum(amount),0)::int xp from bodhix_xp_events where account_id=$1 and app_id=$2', [authenticated.account.id, appId]);
+    return { awarded: result.rows.length ? amount : 0, duplicate: !result.rows.length, appXp: Number(app.rows[0]?.xp ?? 0), ecosystemXp: Number(total.rows[0]?.xp ?? 0) };
   }
 
   async listClaims(status?: string, limit = 100) {

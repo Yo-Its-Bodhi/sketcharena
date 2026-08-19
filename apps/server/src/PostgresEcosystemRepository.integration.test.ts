@@ -107,6 +107,11 @@ suite('PostgresEcosystemRepository integration', () => {
     expect(snapshot?.xp).toContainEqual({ appId: 'poker', seasonId: 'beta-0', xp: 750 });
     const search = await repository.searchAccounts(accountOne);
     expect(search[0]?.ecosystemXp).toBe(750);
+    const verifier = `ci-xp-verifier-${randomUUID()}`; const challenge = createHash('sha256').update(verifier).digest('base64url'); const redirectUri = 'https://poker.bodhix.io/api/bodhix/callback';
+    const issued = await repository.issueAuthCode(accountOne, 'poker', redirectUri, challenge); const consumed = await repository.consumeAuthCode(issued.code, 'poker', redirectUri, verifier);
+    const receipt = await repository.recordAppXp(consumed.appSession.token, 'poker', 125, 'CI authenticated hand XP', `ci-hand-${suffix}`, 'hand-42', 'beta-0');
+    expect(receipt).toMatchObject({ awarded: 125, duplicate: false, appXp: 875, ecosystemXp: 875 });
+    expect(await repository.recordAppXp(consumed.appSession.token, 'poker', 125, 'CI authenticated hand XP', `ci-hand-${suffix}`, 'hand-42', 'beta-0')).toMatchObject({ awarded: 0, duplicate: true, appXp: 875, ecosystemXp: 875 });
   });
 
   it('reserves consumable claims once and restores quantity when an operator rejects one', async () => {
