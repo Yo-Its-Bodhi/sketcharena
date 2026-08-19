@@ -31,12 +31,18 @@ import { PostgresPromotionRepository } from './promotion/PostgresPromotionReposi
 import { PostgresReportRepository } from './moderation/PostgresReportRepository.js';
 import { preparePanicArchiveDeployment } from './mint/PanicArchiveDeployment.js';
 import { MemoryPromptRepository, PostgresPromptRepository, PromptLibrary, PROMPT_CATEGORIES, PROMPT_DIFFICULTIES } from './prompt/PromptLibrary.js';
+import { PostgresEcosystemRepository } from './PostgresEcosystemRepository.js';
 
 const PORT = Number(process.env.PORT ?? 4100);
 const BIND_HOST = process.env.BIND_HOST ?? '127.0.0.1';
 const RELEASE_SHA = process.env.RELEASE_SHA?.trim() || 'development';
 const METRICS_TOKEN_HASH = process.env.METRICS_TOKEN && process.env.METRICS_TOKEN.length >= 32 ? createHash('sha256').update(process.env.METRICS_TOKEN).digest() : null;
 const WEB_ORIGINS = (process.env.WEB_ORIGIN ?? 'http://localhost:5173').split(',').map((value) => value.trim());
+const BODHIX_APP_REDIRECTS = new Map<string, Set<string>>();
+for (const entry of (process.env.BODHIX_APP_REDIRECTS ?? 'poker=https://poker.bodhix.io/api/bodhix/callback|http://localhost:3000/api/bodhix/callback').split(',')) {
+  const [appId, destinations] = entry.split('='); if (!appId?.trim() || !destinations?.trim()) continue;
+  BODHIX_APP_REDIRECTS.set(appId.trim(), new Set(destinations.split('|').map((value) => value.trim()).filter(Boolean)));
+}
 const operations = new OperationalState();
 const app = express();
 const server = createServer(app);
@@ -107,6 +113,7 @@ const accountRepository = databasePool ? new PostgresAccountRepository(databaseP
     : new FileAccountRepository(persistence.accountFile);
 const accounts = new AccountService(accountRepository);
 const passkeys = new PasskeyService(accountRepository, accounts, loadPasskeyConfiguration());
+const ecosystem = databasePool ? new PostgresEcosystemRepository(databasePool) : null;
 const SESSION_COOKIE = 'sketch_session';
 const COOKIE_SECURE = loadPasskeyConfiguration().origin.startsWith('https://');
 const actionLimit = new SlidingLimit(35, 10_000);
@@ -266,6 +273,32 @@ app.post('/api/account/passkeys/authenticate/verify', async (request, response) 
   try { const authenticated = await passkeys.verifyAuthentication(parsed.data.challengeId, parsed.data.response as unknown as AuthenticationResponseJSON, parsed.data.deviceLabel); setPlayerCookie(response, authenticated.token, authenticated.session.expiresAt); return response.json(publicAccount(authenticated.account, authenticated.session.id)); }
   catch (error) { return response.status(401).json({ error: error instanceof Error ? error.message : 'Passkey sign-in failed' }); }
 });
+const ecosystemConnectSchema = z.object({
+  app: z.string().trim().min(2).max(48), redirectUri: z.string().url().max(500), codeChallenge: z.string().regex(/^[A-Za-z0-9_-]{43,128}$/), state: z.string().regex(/^[A-Za-z0-9_-]{16,160}$/),
+});
+const ecosystemExchangeSchema = z.object({
+  app: z.string().trim().min(2).max(48), redirectUri: z.string().url().max(500), code: z.string().regex(/^[A-Za-z0-9_-]{40,128}$/), verifier: z.string().regex(/^[A-Za-z0-9_-]{43,128}$/),
+});
+app.get('/api/ecosystem/connect', async (request, response) => {
+  if (!ecosystem) return response.status(503).json({ error: 'The BodhiX account authority is not connected' });
+  const input = ecosystemConnectSchema.safeParse(request.query); if (!input.success) return response.status(400).json({ error: 'That BodhiX app handoff is invalid' });
+  if (!BODHIX_APP_REDIRECTS.get(input.data.app)?.has(input.data.redirectUri)) return response.status(400).json({ error: 'That app callback is not approved' });
+  const authenticated = await playerAccountFromRequest(request);
+  if (!authenticated) {
+    const continuation = `/api/ecosystem/connect?${new URLSearchParams({ app: input.data.app, redirectUri: input.data.redirectUri, codeChallenge: input.data.codeChallenge, state: input.data.state })}`;
+    return response.redirect(303, `/account?bodhix_continue=${encodeURIComponent(continuation)}`);
+  }
+  const issued = await ecosystem.issueAuthCode(authenticated.account.id, input.data.app, input.data.redirectUri, input.data.codeChallenge);
+  const destination = new URL(input.data.redirectUri); destination.searchParams.set('code', issued.code); destination.searchParams.set('state', input.data.state);
+  return response.redirect(303, destination.toString());
+});
+app.post('/api/ecosystem/exchange', async (request, response) => {
+  if (!ecosystem) return response.status(503).json({ error: 'The BodhiX account authority is not connected' });
+  const input = ecosystemExchangeSchema.safeParse(request.body); if (!input.success) return response.status(400).json({ error: 'That BodhiX app handoff is invalid' });
+  if (!BODHIX_APP_REDIRECTS.get(input.data.app)?.has(input.data.redirectUri)) return response.status(400).json({ error: 'That app callback is not approved' });
+  try { return response.json(await ecosystem.consumeAuthCode(input.data.code, input.data.app, input.data.redirectUri, input.data.verifier)); }
+  catch (error) { return response.status(401).json({ error: error instanceof Error ? error.message : 'BodhiX sign-in failed' }); }
+});
 const walletAddressSchema = z.string().regex(/^0x[0-9a-f]{40}$/i);
 const walletChallengeSchema = z.object({ address: walletAddressSchema });
 const walletVerifySchema = z.object({ challengeId: z.string().uuid(), address: walletAddressSchema, signature: z.string().regex(/^0x[0-9a-f]+$/i).max(1_000) });
@@ -321,13 +354,40 @@ app.post('/api/wallet/challenge', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request); if (!ownerSessionId) return response.status(401).json({ error: 'Player authentication required' });
   if (!walletLimit.take(`${request.ip}:challenge`)) return response.status(429).json({ error: 'Too many wallet attempts—try again shortly' });
   const parsed = walletChallengeSchema.safeParse(request.body); if (!parsed.success) return response.status(400).json({ error: 'Wallet address is invalid' });
-  try { return response.status(201).json(await minting.createChallenge(ownerSessionId, parsed.data.address)); } catch (error) { return sendMintError(response, error); }
+  try { if (ecosystem) await ecosystem.assertWalletAvailable(ownerSessionId, parsed.data.address); return response.status(201).json(await minting.createChallenge(ownerSessionId, parsed.data.address)); } catch (error) { return sendMintError(response, error); }
 });
 app.post('/api/wallet/verify', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request); if (!ownerSessionId) return response.status(401).json({ error: 'Player authentication required' });
   if (!walletLimit.take(`${request.ip}:verify`)) return response.status(429).json({ error: 'Too many wallet attempts—try again shortly' });
   const parsed = walletVerifySchema.safeParse(request.body); if (!parsed.success) return response.status(400).json({ error: 'Wallet proof is invalid' });
-  try { return response.json(await minting.verifyWallet(ownerSessionId, parsed.data.challengeId, parsed.data.address, parsed.data.signature)); } catch (error) { return sendMintError(response, error); }
+  try {
+    const binding = await minting.verifyWallet(ownerSessionId, parsed.data.challengeId, parsed.data.address, parsed.data.signature);
+    if (ecosystem) await ecosystem.addWallet(ownerSessionId, parsed.data.address, 'Verified through Sketch Arena');
+    return response.json(binding);
+  } catch (error) { return sendMintError(response, error); }
+});
+app.get('/api/ecosystem/me', async (request, response) => {
+  const accountId = await playerIdFromRequest(request); if (!accountId) return response.status(401).json({ error: 'BodhiX authentication required' });
+  if (!ecosystem) return response.status(503).json({ error: 'BodhiX identity is unavailable outside the production database' });
+  const snapshot = await ecosystem.accountSnapshot(accountId, false); return snapshot ? response.json(snapshot) : response.status(404).json({ error: 'BodhiX account not found' });
+});
+app.post('/api/ecosystem/wallets/:walletId/primary', async (request, response) => {
+  const accountId = await playerIdFromRequest(request); if (!accountId) return response.status(401).json({ error: 'BodhiX authentication required' });
+  if (!ecosystem) return response.status(503).json({ error: 'BodhiX identity is unavailable outside the production database' });
+  const walletId = z.string().uuid().safeParse(request.params.walletId); if (!walletId.success) return response.status(400).json({ error: 'Wallet link is invalid' });
+  try { const primary = await ecosystem.setPrimaryWallet(accountId, walletId.data); await mintRepository.bindWallet(accountId, primary.address as `0x${string}`, Date.now()); log('info', 'ecosystem.wallet_primary_changed', { accountId, walletId: walletId.data }); return response.json(primary); }
+  catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'Primary wallet could not be changed' }); }
+});
+app.delete('/api/ecosystem/wallets/:walletId', async (request, response) => {
+  const accountId = await playerIdFromRequest(request); if (!accountId) return response.status(401).json({ error: 'BodhiX authentication required' });
+  if (!ecosystem) return response.status(503).json({ error: 'BodhiX identity is unavailable outside the production database' });
+  const walletId = z.string().uuid().safeParse(request.params.walletId); if (!walletId.success) return response.status(400).json({ error: 'Wallet link is invalid' });
+  try { const primary = await ecosystem.revokeWallet(accountId, walletId.data); await mintRepository.bindWallet(accountId, primary.address as `0x${string}`, Date.now()); log('info', 'ecosystem.wallet_revoked', { accountId, walletId: walletId.data }); return response.json({ revoked: walletId.data, primary }); }
+  catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'Wallet could not be removed' }); }
+});
+app.get('/api/ecosystem/rewards', async (_request, response) => {
+  if (!ecosystem) return response.status(503).json({ error: 'BodhiX rewards are unavailable outside the production database' });
+  return response.json(await ecosystem.listRewards(false));
 });
 app.get('/api/progression', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request);
@@ -369,6 +429,19 @@ const grantSchema = z.object({ ...rewardFields, sessionIds: z.array(z.string().u
   .refine((value) => !['item', 'achievement'].includes(value.kind) || Boolean(value.itemId), { message: 'This reward requires an item ID' }).refine((value) => value.kind !== 'mint-discount' || Boolean(value.discountBps), { message: 'This reward requires a discount percentage' });
 const allPlayerCampaignSchema = z.object({ ...rewardFields, idempotencyKey: z.string().trim().min(8).max(120), dryRun: z.boolean().default(true), confirmation: z.string().optional() })
   .refine((value) => !['item', 'achievement'].includes(value.kind) || Boolean(value.itemId), { message: 'This reward requires an item ID' }).refine((value) => value.kind !== 'mint-discount' || Boolean(value.discountBps), { message: 'This reward requires a discount percentage' });
+const ecosystemRewardSchema = z.object({
+  code: z.string().trim().min(3).max(100).regex(/^[a-z0-9][a-z0-9-]*$/), name: z.string().trim().min(2).max(120),
+  kind: z.enum(['cosmetic','xp','badge','title','emote','discount','mint-credit','nft-claim','store-credit','pass-entitlement','consumable']),
+  scope: z.enum(['app','ecosystem']), appId: z.string().trim().min(2).max(48).optional(), seasonId: z.string().trim().min(2).max(64).optional(),
+  transferable: z.boolean().default(false), consumable: z.boolean().default(false), supplyCap: z.number().int().positive().optional(),
+  metadata: z.record(z.string(), z.unknown()).default({}), status: z.enum(['draft','private','live','retired']).default('draft'),
+}).refine((value) => value.scope === 'ecosystem' ? !value.appId : Boolean(value.appId), { message: 'App rewards require an app; ecosystem rewards cannot name one app' })
+  .refine((value) => value.kind !== 'xp' || value.scope === 'app', { message: 'XP must be credited to one BodhiX app; ecosystem XP is the sum across every app' });
+const ecosystemGrantSchema = z.object({
+  accountIds: z.array(z.string().uuid()).min(1).max(500), rewardCode: z.string().trim().min(3).max(100), quantity: z.number().int().positive().max(1_000_000),
+  reason: z.string().trim().min(3).max(240), idempotencyKey: z.string().trim().min(8).max(120), expiresAt: z.number().int().positive().optional(),
+  source: z.string().trim().min(2).max(32).optional(), sourceReference: z.string().trim().max(160).optional(), confirmation: z.string().optional(),
+});
 app.post('/api/artworks', async (request, response) => {
   const ownerSessionId = await playerIdFromRequest(request);
   if (!ownerSessionId) return response.status(401).json({ error: 'Vault authentication required' });
@@ -408,6 +481,50 @@ app.get('/api/admin/overview', async (request, response) => {
   const availableMintCredits = players.reduce((total, player) => total + player.rewards.filter((reward) => reward.kind === 'mint-credit' && (!reward.expiresAt || reward.expiresAt > now)).reduce((sum, reward) => sum + Math.max(0, reward.amount - (reward.redeemedAmount ?? (reward.redeemedAt ? reward.amount : 0))), 0), 0);
   const promotionList = await promotions.list();
   return response.json({ actor: { name: principal.name, role: principal.role }, season: { id: 'season-0', name: 'The First Mess' }, players: players.length, availableMintCredits, rooms: rooms.size, moderation: await reports.counts(), minting: minting.status(), mintOps: await mintRepository.adminSnapshot(12), promotions: { total: promotionList.length, active: promotionList.filter((campaign) => campaign.status === 'active').length, campaigns: promotionList.slice(0, 20), audit: await promotions.audit(12) }, audit: await progression.audit(12) });
+});
+app.get('/api/admin/ecosystem/overview', async (request, response) => {
+  const principal = authorizeAdmin(request.headers.authorization, request.ip, 'viewer'); if (!principal) return response.status(adminStatus()).json({ error: adminError() });
+  if (!ecosystem) return response.status(503).json({ error: 'The BodhiX ecosystem database is not connected' });
+  return response.json({ actor: { name: principal.name, role: principal.role }, ...(await ecosystem.overview()), audit: await ecosystem.audit(20) });
+});
+app.get('/api/admin/ecosystem/accounts', async (request, response) => {
+  if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
+  if (!ecosystem) return response.status(503).json({ error: 'The BodhiX ecosystem database is not connected' });
+  const search = z.string().trim().max(80).catch('').parse(request.query.search); return response.json(await ecosystem.searchAccounts(search, 100));
+});
+app.get('/api/admin/ecosystem/accounts/:accountId', async (request, response) => {
+  if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
+  if (!ecosystem) return response.status(503).json({ error: 'The BodhiX ecosystem database is not connected' });
+  const accountId = z.string().uuid().safeParse(request.params.accountId); if (!accountId.success) return response.status(400).json({ error: 'BodhiX account ID is invalid' });
+  const snapshot = await ecosystem.accountSnapshot(accountId.data, true); return snapshot ? response.json(snapshot) : response.status(404).json({ error: 'BodhiX account not found' });
+});
+app.get('/api/admin/ecosystem/rewards', async (request, response) => {
+  if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
+  if (!ecosystem) return response.status(503).json({ error: 'The BodhiX ecosystem database is not connected' });
+  return response.json(await ecosystem.listRewards(true));
+});
+app.post('/api/admin/ecosystem/rewards', async (request, response) => {
+  const principal = authorizeAdmin(request.headers.authorization, request.ip, 'admin'); if (!principal) return response.status(adminStatus()).json({ error: adminError('admin') });
+  if (!ecosystem) return response.status(503).json({ error: 'The BodhiX ecosystem database is not connected' });
+  const input = ecosystemRewardSchema.safeParse(request.body); if (!input.success) return response.status(400).json({ error: input.error.issues[0]?.message ?? 'BodhiX reward is invalid' });
+  try { return response.status(201).json(await ecosystem.saveReward(input.data, `backstage:${principal.name}`)); } catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'BodhiX reward could not be saved' }); }
+});
+app.post('/api/admin/ecosystem/grants/preview', async (request, response) => {
+  const principal = authorizeAdmin(request.headers.authorization, request.ip, 'operator'); if (!principal) return response.status(adminStatus()).json({ error: adminError('operator') });
+  if (!ecosystem) return response.status(503).json({ error: 'The BodhiX ecosystem database is not connected' });
+  const input = ecosystemGrantSchema.safeParse(request.body); if (!input.success) return response.status(400).json({ error: 'BodhiX grant is invalid' });
+  try { return response.json(await ecosystem.previewGrant({ ...input.data, actor: `backstage:${principal.name}` })); } catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'BodhiX grant preview failed' }); }
+});
+app.post('/api/admin/ecosystem/grants', async (request, response) => {
+  const principal = authorizeAdmin(request.headers.authorization, request.ip, 'admin'); if (!principal) return response.status(adminStatus()).json({ error: adminError('admin') });
+  if (!ecosystem) return response.status(503).json({ error: 'The BodhiX ecosystem database is not connected' });
+  const input = ecosystemGrantSchema.safeParse(request.body); if (!input.success || input.data.confirmation !== 'GRANT BODHIX REWARDS') return response.status(400).json({ error: 'Preview the grant and enter the exact confirmation first' });
+  try { return response.status(201).json(await ecosystem.grant({ ...input.data, actor: `backstage:${principal.name}` })); } catch (error) { return response.status(409).json({ error: error instanceof Error ? error.message : 'BodhiX grant failed' }); }
+});
+app.get('/api/admin/ecosystem/audit', async (request, response) => {
+  if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });
+  if (!ecosystem) return response.status(503).json({ error: 'The BodhiX ecosystem database is not connected' });
+  return response.json(await ecosystem.audit(200));
 });
 app.get('/api/admin/players', async (request, response) => {
   if (!authorizeAdmin(request.headers.authorization, request.ip, 'viewer')) return response.status(adminStatus()).json({ error: adminError() });

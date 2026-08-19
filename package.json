@@ -25,6 +25,7 @@
     "ops:restore:drill": "node scripts/restore-postgres-drill.mjs",
     "ops:test": "node --test scripts/backup-data.test.mjs scripts/backup-postgres.test.mjs scripts/restore-postgres-drill.test.mjs scripts/import-json-to-postgres.integration.test.mjs scripts/migrate-postgres.test.mjs",
     "db:migrate": "node scripts/migrate-postgres.mjs",
+    "ecosystem:verify": "node scripts/verify-bodhix-ecosystem.mjs",
     "db:import:legacy": "node scripts/import-json-to-postgres.mjs",
     "qa:load": "npm run build -w @sketch-arena/protocol && npm run build -w @sketch-arena/server && node scripts/load-test.mjs",
     "check": "npm run lint && npm run build && npm run test && npm run ops:test"
