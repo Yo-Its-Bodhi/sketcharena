@@ -111,6 +111,15 @@ describe('Socket.IO authoritative transport lifecycle', () => {
     expect(resumed).toMatchObject({ ok: true, data: { sessionId: account.id } });
   });
 
+  it('creates and signs into the same password account from another browser credential', async () => {
+    const create = await fetch(`${origin}/api/account/password/session`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Password Player', password: 'eight-plus', recoveryCredential: 'e'.repeat(64), deviceLabel: 'Laptop' }) });
+    expect(create.status).toBe(201); const account = await create.json() as { id: string; passwordSet: boolean }; expect(account.passwordSet).toBe(true);
+    const login = await fetch(`${origin}/api/account/password/session`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': '127.0.0.2' }, body: JSON.stringify({ name: 'password player', password: 'eight-plus', recoveryCredential: 'f'.repeat(64), deviceLabel: 'Tablet' }) });
+    expect(login.status).toBe(200); expect(await login.json()).toMatchObject({ id: account.id, passwordSet: true }); expect(login.headers.getSetCookie()[0]).toContain('sketch_session=');
+    const wrong = await fetch(`${origin}/api/account/password/session`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': '127.0.0.3' }, body: JSON.stringify({ name: 'Password Player', password: 'definitely-wrong', recoveryCredential: '1'.repeat(64), deviceLabel: 'Intruder' }) });
+    expect(wrong.status).toBe(401); expect(await wrong.json()).toMatchObject({ error: 'That name or password is incorrect' });
+  });
+
   it('joins two players, replaces a duplicate tab, rejects stale actions, and migrates the host', async () => {
     const aliceCredential = 'a'.repeat(64); const bobCredential = 'b'.repeat(64);
     const migrate = async (credential: string, name: string) => { const response = await fetch(`${origin}/api/account/migrate`, { method: 'POST', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json' }, body: JSON.stringify({ name, deviceLabel: `${name} browser` }) }); expect(response.status).toBe(201); return response.headers.getSetCookie()[0]?.split(';')[0]; };

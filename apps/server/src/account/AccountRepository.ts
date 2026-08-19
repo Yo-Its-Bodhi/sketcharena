@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
@@ -8,6 +8,7 @@ export interface PlayerAccount {
   id: string;
   name: string;
   legacyCredentialHash?: string;
+  passwordHash?: string;
   securedAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -141,6 +142,30 @@ export class AccountService {
     const token = createSecret(); const session: PlayerDeviceSession = { id: randomUUID(), accountId: account.id, tokenHash: hashSecret(token), label: label.slice(0, 80), createdAt: now, lastSeenAt: now, expiresAt: now + this.sessionTtlMs };
     await this.repository.saveSession(session); return { account, token, session };
   }
+  async startWithPassword(credential: string, name: string, password: string, label: string, now = Date.now()): Promise<{ account: PlayerAccount; token: string; session: PlayerDeviceSession; created: boolean }> {
+    const canonicalName = canonicalPlayerName(name); const nameKey = playerNameKey(canonicalName); const legacyCredentialHash = hashSecret(credential.toLowerCase());
+    const [claimed, recovered] = await Promise.all([this.repository.findByNameKey(nameKey), this.repository.findByLegacyCredentialHash(legacyCredentialHash)]);
+    let account: PlayerAccount; let created = false;
+    if (claimed) {
+      if (!claimed.passwordHash) {
+        if (recovered?.id !== claimed.id) throw new Error('This beta account needs its recovery key once before a password can be added. Use Restore with a Recovery Key below.');
+        account = { ...claimed, passwordHash: await hashPassword(password), securedAt: claimed.securedAt ?? now, updatedAt: now };
+      } else {
+        if (!await verifyPassword(password, claimed.passwordHash)) throw new Error('That name or password is incorrect');
+        account = claimed;
+      }
+    } else if (recovered) {
+      if (recovered.passwordHash && !await verifyPassword(password, recovered.passwordHash)) throw new Error('That name or password is incorrect');
+      account = { ...recovered, passwordHash: recovered.passwordHash ?? await hashPassword(password), securedAt: recovered.securedAt ?? now, updatedAt: now };
+    } else {
+      created = true; account = { id: legacyAccountId(credential), name: canonicalName, legacyCredentialHash, passwordHash: await hashPassword(password), securedAt: now, createdAt: now, updatedAt: now };
+    }
+    await this.repository.saveAccount(account); const issued = await this.issueSession(account, label, now); return { ...issued, created };
+  }
+  async setPassword(account: PlayerAccount, password: string, now = Date.now()): Promise<PlayerAccount> {
+    const updated = { ...account, passwordHash: await hashPassword(password), securedAt: account.securedAt ?? now, updatedAt: now };
+    await this.repository.saveAccount(updated); return updated;
+  }
   async fromSessionToken(token: string | undefined, now = Date.now()): Promise<{ account: PlayerAccount; session: PlayerDeviceSession } | null> {
     if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null; return this.repository.findSessionByTokenHash(hashSecret(token), now);
   }
@@ -151,6 +176,25 @@ export class AccountService {
     const value: AccountChallenge = { id: randomUUID(), kind, challenge, accountId, createdAt: now, expiresAt: now + 5 * 60_000 }; await this.repository.saveChallenge(value); return value;
   }
   consumeChallenge(id: string, kind: AccountChallenge['kind'], now = Date.now()): Promise<AccountChallenge | null> { return this.repository.consumeChallenge(id, kind, now); }
+  private async issueSession(account: PlayerAccount, label: string, now: number): Promise<{ account: PlayerAccount; token: string; session: PlayerDeviceSession }> {
+    const token = createSecret(); const session: PlayerDeviceSession = { id: randomUUID(), accountId: account.id, tokenHash: hashSecret(token), label: label.trim().slice(0, 80) || 'This browser', createdAt: now, lastSeenAt: now, expiresAt: now + this.sessionTtlMs };
+    await this.repository.saveSession(session); return { account, token, session };
+  }
+}
+
+const passwordBytes = (value: string): Buffer => Buffer.from(value.normalize('NFKC'), 'utf8');
+const derivePassword = (password: Buffer, salt: Buffer, length: number, options: { N: number; r: number; p: number; maxmem: number }): Promise<Buffer> => new Promise((resolvePromise, reject) => {
+  scrypt(password, salt, length, options, (error, derived) => error ? reject(error) : resolvePromise(derived));
+});
+export async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16); const derived = await derivePassword(passwordBytes(password), salt, 64, { N: 16_384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+  return `scrypt$16384$8$1$${salt.toString('base64url')}$${derived.toString('base64url')}`;
+}
+export async function verifyPassword(password: string, encoded: string): Promise<boolean> {
+  const [scheme, n, r, p, saltText, hashText] = encoded.split('$'); if (scheme !== 'scrypt' || !n || !r || !p || !saltText || !hashText) return false;
+  const expected = Buffer.from(hashText, 'base64url'); if (expected.length !== 64) return false;
+  try { const actual = await derivePassword(passwordBytes(password), Buffer.from(saltText, 'base64url'), expected.length, { N: Number(n), r: Number(r), p: Number(p), maxmem: 64 * 1024 * 1024 }); return timingSafeEqual(actual, expected); }
+  catch { return false; }
 }
 
 export function canonicalPlayerName(value: string): string { return value.normalize('NFKC').trim().replace(/\s+/g, ' '); }

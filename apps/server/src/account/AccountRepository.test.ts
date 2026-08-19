@@ -35,6 +35,24 @@ describe('AccountService', () => {
     expect(stored).toContain('tokenHash');
   });
 
+  it('creates password accounts, signs them in on another device and rejects the wrong password', async () => {
+    const repository = new MemoryAccountRepository(); const service = new AccountService(repository);
+    const created = await service.startWithPassword('3'.repeat(64), 'Password Weirdo', 'correct horse', 'Laptop', 25_000);
+    expect(created).toMatchObject({ created: true, account: { name: 'Password Weirdo', securedAt: 25_000 }, session: { label: 'Laptop' } });
+    expect(created.account.passwordHash).toMatch(/^scrypt\$16384\$8\$1\$/); expect(created.account.passwordHash).not.toContain('correct horse');
+    const signedIn = await service.startWithPassword('4'.repeat(64), 'password weirdo', 'correct horse', 'Tablet', 25_100);
+    expect(signedIn).toMatchObject({ created: false, account: { id: created.account.id }, session: { label: 'Tablet' } });
+    await expect(service.startWithPassword('5'.repeat(64), 'Password Weirdo', 'wrong password', 'Impostor', 25_200)).rejects.toThrow('incorrect');
+  });
+
+  it('lets the matching recovery credential add the first password to a beta account', async () => {
+    const repository = new MemoryAccountRepository(); const service = new AccountService(repository);
+    const beta = await service.migrateLegacy(credential, 'Beta Bodhi', 'Old browser', 26_000);
+    const upgraded = await service.startWithPassword(credential, 'Beta Bodhi', 'new password', 'Old browser', 26_100);
+    expect(upgraded.account).toMatchObject({ id: beta.account.id, securedAt: 26_100 }); expect(upgraded.account.passwordHash).toBeTruthy();
+    await expect(service.startWithPassword('6'.repeat(64), 'Beta Bodhi', 'new password', 'Tablet', 26_200)).resolves.toMatchObject({ account: { id: beta.account.id } });
+  });
+
   it('consumes short-lived challenges once', async () => {
     const service = new AccountService(new MemoryAccountRepository()); const challenge = await service.createChallenge('registration', 'random-challenge', 'account', 30_000);
     expect(await service.consumeChallenge(challenge.id, 'registration', 30_100)).toEqual(challenge);
